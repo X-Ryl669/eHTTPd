@@ -31,6 +31,13 @@ namespace Refl
             if (str[p] == avoid) return "";
         return str[p] ? &str[p+off] : nullptr;
     }
+    constexpr const char * rfind(const char * str, char l, std::size_t off = 0, char avoid = 0)
+    {
+        std::size_t p = 0; for(; str[p]; p++) {}
+        for(;p && str[p] != l; p--)
+            if (str[p] == avoid) return "";
+        return p ? &str[p+off] : nullptr;
+    }
 
     constexpr bool strequal(const char * s1, const char * s2)
     {
@@ -58,7 +65,7 @@ namespace Refl
     {
         constexpr const char * str = __PRETTY_FUNCTION__;
         constexpr const char * p = find(str, '$');
-        constexpr const char * n = find(p, ':', 2, '(');
+        constexpr const char * n = rfind(p, ':', 1, ')');
         if (n == nullptr) return find(p, '=', 2, ']');
         return n;
     }
@@ -78,6 +85,24 @@ namespace Refl
         return &Details::Wrapper<arr>::v[0];
     #ifdef __clang__
         } else return "";
+    #endif
+    }
+
+    template<typename enm, auto $>
+    requires std::is_enum_v<enm>
+    constexpr auto enum_raw_name_only_str()
+    {
+    #ifdef __clang__
+        if constexpr (enum_exists<enm, $>(0)) {
+    #endif
+        constexpr const char * n = enum_value_exist<enm, static_cast<enm>($)>();
+        if constexpr (*n == 0) return CompileTime::str("");
+        constexpr const char * e = *n == 0 ? n : find(n, ']');
+        constexpr auto range = e - n;
+        constexpr auto arr = [&n]<std::size_t ... i>(std::index_sequence<i ...>){ return std::array<char, range + 1>{*(n+i) ...}; }(std::make_index_sequence<range>{});
+        return CompileTime::str(Details::Wrapper<arr>::v);
+    #ifdef __clang__
+        } else return CompileTime::str("");
     #endif
     }
 
@@ -206,17 +231,23 @@ namespace Refl
     }
 
 
-
     // The functions below are useful for enumerations that are contiguous, starting with 0, sorted alphabetically
     // Enumeration with value -1 is used as an error code, since it isn't reflected
     // In that case, they are giving the smallest binary size for reflection, and the highest runtime cost for conversion from string to enumeration
 
     /** This kind of method provides the smallest enum to string in the final binary size so they are preferred instead of hand made version and reusing Refl code every where */
+
+    // This is to avoid C++23 here: static constexpr is not allowed in C++20 in function, only in struct
+    namespace Details { template <Enum E, std::size_t ... i > struct Reflect { static constexpr std::array<const char*, sizeof...(i)> values = {Refl::enum_raw_name_only<E, (int)i>()...}; }; }
+
+    template <Enum E> constexpr bool isCaseSensitive = true;
+
     template <Enum E>
     constexpr inline auto &_supports()
     {
         constexpr auto maxV = Refl::find_max_value<E, 0>();
-        return *[]<std::size_t ... i>(std::index_sequence<i ...>) constexpr { constexpr static std::array<const char*, maxV+1> values = {Refl::enum_raw_name_only<E, (int)i>()...}; return &values; }(std::make_index_sequence<maxV+1>{});
+        return *[]<std::size_t ... i>(std::index_sequence<i...>) { return &Details::Reflect<E, i...>::values; }(std::make_index_sequence<maxV+1>{});
+//        return *[]<std::size_t ... i>(std::index_sequence<i ...>) constexpr { constexpr static std::array<const char*, maxV+1> values = {Refl::enum_raw_name_only<E, (int)i>()...}; return &values; }(std::make_index_sequence<maxV+1>{});
     }
     template <Enum E>
     inline const char * toString(E m)
@@ -250,14 +281,21 @@ namespace Refl
         while(l <= r)
         {
             size_t m = l + (r - l) / 2;
-            int c = string.compare(sup[m]);
-            if (c == 0) return Opt<E>{(E)m};
-            if (c > 0) l = m + 1;
-            else r = m - 1;
+            // Check if any transform is needed for this enumeration type
+            if constexpr (isCaseSensitive<E>) {
+                int c = string.compare(sup[m]);
+                if (c == 0) return Opt<E>{(E)m};
+                if (c > 0) l = m + 1;
+                else r = m - 1;
+            } else {
+                int c = string.compareCaseless(sup[m]);
+                if (c == 0) return Opt<E>{(E)m};
+                if (c > 0) l = m + 1;
+                else r = m - 1;
+            }
         }
         return Opt<E>{};
     }
-
 
 
 

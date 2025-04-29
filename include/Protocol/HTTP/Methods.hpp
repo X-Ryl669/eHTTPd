@@ -33,68 +33,32 @@ namespace Protocol
             DELETE  = 0,
             GET     = 1,
             HEAD    = 2,
-            POST    = 3,
-            PUT     = 4,
-            OPTIONS = 5,
+            OPTIONS = 3,
+            POST    = 4,
+            PUT     = 5,
         };
 
 
-
         /** The important HTTP headers used in this library. All other headers are accessible via a callback but those are converted to an enum value since it's required for any request */
-        enum RequestHeaders
+        enum Headers
         {
-            InvalidRequest = -1,
+            InvalidHeader = -1,
             Accept = 0,
             AcceptCharset,
             IF(MaxSupport, AcceptDatetime, )
             AcceptEncoding,
             AcceptLanguage,
-            IF(MaxSupport, AccessControlRequestMethod, )
-            Authorization,
-            CacheControl,
-            Connection,
-            ContentEncoding,
-            ContentType,
-            ContentLength,
-            Cookie,
-            Date,
-            IF(MaxSupport, Expect, )
-            IF(MaxSupport, Forwarded, )
-            IF(MaxSupport, From, )
-            Host,
-            IF(MaxSupport, IfMatch, )
-            IF(MaxSupport, IfModifiedSince, )
-            IF(MaxSupport, IfNoneMatch, )
-            IF(MaxSupport, IfRange, )
-            IF(MaxSupport, IfUnmodifiedSince, )
-            IF(MaxSupport, MaxForwards, )
-            Origin,
-            IF(MaxSupport, Prefer, )
-            IF(MaxSupport, ProxyAuthorization, )
-            Range,
-            Referer,
-            TE, // This one will break the parser
-            IF(MaxSupport, Trailer, )
-            TransferEncoding,
-            UserAgent,
-            Upgrade,
-            IF(MaxSupport, Via, )
-            IF(MaxSupport, XForwardedFor, )
-        };
-
-        /** The usual response headers in HTTP */
-        enum ResponseHeaders
-        {
-            InvalidResponseHeader = -1,
-            AccessControlAllowOrigin = 0,
-            IF(MaxSupport, AccessControlAllowCredentials, )
-            IF(MaxSupport, AccessControlExposeHeaders, )
-            IF(MaxSupport, AccessControlMaxAge, )
-            IF(MaxSupport, AccessControlAllowMethods, )
-            IF(MaxSupport, AccessControlAllowHeaders, )
             IF(MaxSupport, AcceptPatch, )
             AcceptRanges,
+            IF(MaxSupport, AccessControlAllowCredentials, )
+            IF(MaxSupport, AccessControlAllowHeaders, )
+            IF(MaxSupport, AccessControlAllowMethods, )
+            AccessControlAllowOrigin = 0,
+            IF(MaxSupport, AccessControlExposeHeaders, )
+            IF(MaxSupport, AccessControlMaxAge, )
+            IF(MaxSupport, AccessControlRequestMethod, )
             IF(MaxSupport, Allow, )
+            Authorization,
             CacheControl,
             Connection,
             ContentDisposition,
@@ -104,20 +68,118 @@ namespace Protocol
             IF(MaxSupport, ContentLocation, )
             ContentRange,
             ContentType,
+            Cookie,
             Date,
-            IF(MaxSupport, ETag, ) // This one will break the parser
+            IF(MaxSupport, ETag, )
+            IF(MaxSupport, Expect, )
             Expires,
+            IF(MaxSupport, Forwarded, )
+            IF(MaxSupport, From, )
+            Host,
+            IF(MaxSupport, IfMatch, )
+            IF(MaxSupport, IfModifiedSince, )
+            IF(MaxSupport, IfNoneMatch, )
+            IF(MaxSupport, IfRange, )
+            IF(MaxSupport, IfUnmodifiedSince, )
             LastModified,
             IF(MaxSupport, Link, )
             Location,
+            IF(MaxSupport, MaxForwards, )
+            Origin,
             Pragma,
+            IF(MaxSupport, Prefer, )
+            IF(MaxSupport, ProxyAuthorization, )
+            Range,
+            Referer,
             Server,
             SetCookie,
             IF(MaxSupport, StrictTransportSecurity, )
+            TE,
             IF(MaxSupport, Trailer, )
             TransferEncoding,
             Upgrade,
+            UserAgent,
+            IF(MaxSupport, Via, )
             WWWAuthenticate,
+            IF(MaxSupport, XForwardedFor, )
+        };
+
+        /** The important HTTP headers used in this library. All other headers are accessible via a callback but those are converted to an enum value since it's required for any request */
+        enum class RequestHeaders
+        {
+            Accept = Headers::Accept,
+            AcceptCharset = Headers::AcceptCharset,
+            IF(MaxSupport, AcceptDatetime = Headers::AcceptDatetime, )
+            AcceptEncoding = Headers::AcceptEncoding,
+            AcceptLanguage = Headers::AcceptLanguage,
+            IF(MaxSupport, AccessControlRequestMethod = Headers::AccessControlRequestMethod, )
+            Authorization = Headers::Authorization,
+            CacheControl = Headers::CacheControl,
+            Connection = Headers::Connection,
+            ContentEncoding = Headers::ContentEncoding,
+            ContentType = Headers::ContentType,
+            ContentLength = Headers::ContentLength,
+            Cookie = Headers::Cookie,
+            Date = Headers::Date,
+            IF(MaxSupport, Expect = Headers::Expect, )
+            IF(MaxSupport, Forwarded = Headers::Forwarded, )
+            IF(MaxSupport, From = Headers::From, )
+            Host = Headers::Host,
+            IF(MaxSupport, IfMatch = Headers::IfMatch, )
+            IF(MaxSupport, IfModifiedSince = Headers::IfModifiedSince, )
+            IF(MaxSupport, IfNoneMatch = Headers::IfNoneMatch, )
+            IF(MaxSupport, IfRange = Headers::IfRange, )
+            IF(MaxSupport, IfUnmodifiedSince = Headers::IfUnmodifiedSince, )
+            IF(MaxSupport, MaxForwards = Headers::MaxForwards, )
+            Origin = Headers::Origin,
+            IF(MaxSupport, Prefer = Headers::Prefer, )
+            IF(MaxSupport, ProxyAuthorization = Headers::ProxyAuthorization, )
+            Range = Headers::Range,
+            Referer = Headers::Referer,
+            TE = Headers::TE,
+            IF(MaxSupport, Trailer = Headers::Trailer, )
+            TransferEncoding = Headers::TransferEncoding,
+            UserAgent = Headers::UserAgent,
+            Upgrade = Headers::Upgrade,
+            IF(MaxSupport, Via = Headers::Via, )
+            IF(MaxSupport, XForwardedFor = Headers::XForwardedFor, )
+        };
+
+        /** The usual response headers in HTTP */
+        enum class ResponseHeaders
+        {
+            AccessControlAllowOrigin = Headers::AccessControlAllowOrigin,
+            IF(MaxSupport, AccessControlAllowCredentials = Headers::AccessControlAllowCredentials, )
+            IF(MaxSupport, AccessControlExposeHeaders = Headers::AccessControlExposeHeaders, )
+            IF(MaxSupport, AccessControlMaxAge = Headers::AccessControlMaxAge, )
+            IF(MaxSupport, AccessControlAllowMethods = Headers::AccessControlAllowMethods, )
+            IF(MaxSupport, AccessControlAllowHeaders = Headers::AccessControlAllowHeaders, )
+            IF(MaxSupport, AcceptPatch = Headers::AcceptPatch, )
+            AcceptRanges = Headers::AcceptRanges,
+            IF(MaxSupport, Allow = Headers::Allow, )
+            CacheControl = Headers::CacheControl,
+            Connection = Headers::Connection,
+            ContentDisposition = Headers::ContentDisposition,
+            ContentEncoding = Headers::ContentEncoding,
+            ContentLanguage = Headers::ContentLanguage,
+            ContentLength = Headers::ContentLength,
+            IF(MaxSupport, ContentLocation = Headers::ContentLocation, )
+            ContentRange = Headers::ContentRange,
+            ContentType = Headers::ContentType,
+            Date = Headers::Date,
+            IF(MaxSupport, ETag = Headers::ETag, ) // This one will break the parser
+            Expires = Headers::Expires,
+            LastModified = Headers::LastModified,
+            IF(MaxSupport, Link = Headers::Link, )
+            Location = Headers::Location,
+            Pragma = Headers::Pragma,
+            Server = Headers::Server,
+            SetCookie = Headers::SetCookie,
+            IF(MaxSupport, StrictTransportSecurity = Headers::StrictTransportSecurity, )
+            IF(MaxSupport, Trailer = Headers::Trailer, )
+            TransferEncoding = Headers::TransferEncoding,
+            Upgrade = Headers::Upgrade,
+            WWWAuthenticate = Headers::WWWAuthenticate,
         };
 
         /** A compile time processing of the enumeration name to make an enumeration string representation that suit HTTP standard of header naming */
@@ -143,11 +205,6 @@ namespace Protocol
             }
         }
 
-        constexpr inline auto &_supports<RequestHeaders>()
-        {
-            constexpr auto maxV = Refl::find_max_value<RequestHeaders, 0>();
-            return *[]<std::size_t ... i>(std::index_sequence<i ...>) constexpr { constexpr static std::array<const char*, maxV+1> values = {str_ref<makeHTTPHeader<str(Refl::enum_raw_name_only<RequestHeaders, (int)i>())>()>{}.data...}; return &values; }(std::make_index_sequence<maxV+1>{});
-        }
 
 
 
@@ -156,6 +213,20 @@ namespace Protocol
 
 
     }
+}
+
+namespace Refl
+{
+    template <> constexpr bool isCaseSensitive<Protocol::HTTP::Method> = false;
+    template <> constexpr bool isCaseSensitive<Protocol::HTTP::Headers> = false;
+
+    template <>
+    constexpr inline auto & _supports<Protocol::HTTP::Headers>()
+    {
+        constexpr auto maxV = find_max_value<Protocol::HTTP::Headers, 0>();
+        return *[]<std::size_t ... i>(std::index_sequence<i ...>) constexpr { static std::array<const char*, maxV+1> values = { CompileTime::str_ref<Protocol::HTTP::makeHTTPHeader<enum_raw_name_only_str<Protocol::HTTP::Headers, (int)i>()>()>{}.data...}; return &values; }(std::make_index_sequence<maxV+1>{});
+    }
+
 }
 
 #endif

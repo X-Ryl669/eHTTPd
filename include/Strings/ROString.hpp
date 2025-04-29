@@ -4,6 +4,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include "Types.hpp"
+// We need constexpr strncasecmp
+#include "CTString.hpp"
 
 const char usualTrimSequence[] = " \t\v\f\r\n";
 
@@ -334,6 +336,8 @@ public:
     uint32 hash() const { uint32 ret = 5381; for (size_t i = length; i != 0; i--) ret = data[i-1] + ret * 257; return ret; }
     /** Compare a string with another one, return -1 if less, 0 if equal, or +1 if more */
     constexpr int compare(const char * c) const { return strncmp(data, c, length); }
+    /** Compare a string with another one, return -1 if less, 0 if equal, or +1 if more */
+    constexpr int compareCaseless(const char * c) const { return CompileTime::strncasecmp(data, c, length); }
 
     // Construction and operators
 public:
