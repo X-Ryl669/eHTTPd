@@ -1,0 +1,260 @@
+#ifndef hpp_RingBuffer_hpp
+#define hpp_RingBuffer_hpp
+
+// We need types
+#include "../Types.hpp"
+
+namespace Container
+{
+    /** A Power-Of-2 ring buffer (aka Circular Buffer).
+    This is used to store the logs, compressed (the recipe for the log, not the log itself).
+    Then this is also used to recreate a textual representation of the log stored inside.
+
+    The idea is to store variable length logs like this:
+    LogItem [Opt Filename] [Opt Line as VLC] [Opt Mask] [Optional Argument list] LogItem... */
+    template <std::size_t sizePowerOf2>
+    struct RingBuffer
+    {
+        /** The mutex used to protect this structure, manipulated from outside */
+        Mutex                           mutex;
+        /** Read and write pointer in the ring buffer */
+        uint32                          r, w;
+        uint32                          lastLogPos = sizePowerOf2;
+        /** Buffer size minus 1 in bytes */
+        static constexpr const uint32   sm1 = sizePowerOf2 - 1;
+        /** The buffer to write packets into */
+        uint8                           buffer[sizePowerOf2];
+
+        /** Get the consumed size in the buffer */
+        inline uint32 getSize() const { return w >= r ? w - r : (sm1 - r + w + 1); }
+        /** Get the available size in the buffer */
+        inline uint32 freeSize() const { return sm1 - getSize(); }
+        /** Fetch the current read position (used to restore the read pointer later on on rollback) */
+        inline uint32 fetchReadPos() const { return r; }
+        /** Fetch the current read position (used to restore the read pointer later on on rollback) */
+        inline uint32 fetchWritePos() const { return w; }
+        /** Rollback with the saved read position */
+        inline void rollback(const uint32 readPos) { if (readPos >= sm1) return; r = readPos; }
+        /** Rollback the saved write position */
+        inline void rollbackWrite(const uint32 writePos) { if (writePos >= sm1) return; w = writePos; }
+        /** Check if the buffer is full (and, if configured to do so, clean the buffer until there's enough free space) */
+        bool canFit(const uint32 size)
+        {
+            if (size > sm1) return false; // Can't store the data anyway
+            if (freeSize() >= size) return true;
+            // Clean the logs recursively until we have enough space
+            while (freeSize() < size)
+                // The idea, here is to clean log one by one until there's enough space for the new log.
+                // In order to do so, we have to parse the log using the CompileTime's namespace function.
+                // But unlike when generating the log, we only care about extracting specifiers type so we can
+                // call or mimick the load function for the arguments matching the specifiers
+                if (!extract()) return false;
+
+            return true;
+        }
+
+        /** Add data to this buffer (no allocation is done at this time) */
+        bool save(const uint8 * packet, uint32 size)
+        {
+            // Check we can fit the packet
+            if (!canFit(size)) return false;
+
+            const uint32 part1 = std::min(size, sm1 - w + 1);
+            const uint32 part2 = size - part1;
+
+            memcpy((buffer + w), packet, part1);
+            memcpy((buffer), packet + part1, part2);
+
+            w = (w + size) & sm1;
+            return true;
+        }
+        /** Extract data from the buffer.
+            We can skip one copy to rebuilt a contiguous packet by simply returning
+            the two part in the ring buffer and let the application send them successively.
+            From the receiving side, they'll be received as one contiguous packet. */
+        bool load(uint32 size, const uint8 *& packetHead, uint32 & sizeHead, const uint8 *& packetTail,  uint32 & sizeTail)
+        {
+            if (getSize() < size) return false;
+            packetHead = buffer + r;
+            sizeHead = std::min(size, (sm1 - r + 1));
+            sizeTail = size - sizeHead;
+            packetTail = buffer;
+            r = (r + size) & sm1;
+            return true;
+        }
+
+        /** Peek a byte from the buffer. Doesn't advance the read pointer */
+        bool peek(uint8 & x)
+        {
+            if (!getSize()) return false;
+            x = buffer[r];
+            return true;
+        }
+
+        /** The generic save function for the logs */
+        template <typename T>
+        bool saveType(const T val)
+        {
+            return save((const uint8*)&val, sizeof(val));
+        }
+        /** Save a string to the buffer
+            @param str  A pointer on the C string to save
+            @param len  If non zero, contains the actual number of bytes to save (don't include the final NUL)
+                        Else, compute the string length from the actual string size. */
+        bool saveString(const char * str, std::size_t len = 0)
+        {
+            if (!len) len = strlen(str);
+            uint8 c = 0;
+            return save((const uint8*)str, len) && save(&c, 1);
+        }
+        /** Save a pointer without VLC */
+        bool save(const void * ptr)
+        {
+            uintptr_t p = (uintptr_t)(ptr);
+            return save((const uint8*)&p, sizeof(p));
+        }
+        bool save(const char * ptr)
+        {
+            static_assert(sizeof(ptr) == sizeof(void*), "You shouldn't use this to store a string, instead use saveString");
+            return false;
+        }
+        /** Save a float or a double */
+        bool save(const double i)       { return saveType(i); }
+        /** Save a long double */
+        bool save(const long double i)  { return saveType(i); }
+
+        /** Generic load a value from the buffer */
+        template<typename T>
+        bool loadType(T & val)
+        {
+            const uint8 * head = 0, * tail = 0;
+            uint32 sh = 0, st = 0;
+            if (!load(sizeof(val), head, sh, tail, st)) return false;
+            memcpy((uint8*)&val, head, sh);
+            memcpy((uint8*)&val + sh, tail, st);
+            return true;
+        }
+        /** Load a string from the buffer
+            @param str  If not null, will copy the C string into (including the terminating NUL byte)
+            @param len  On output, will be filled with the number of bytes required to load this string, including the terminating NUL byte */
+        bool loadString(char * str, std::size_t & len)
+        {
+            // Find length first
+            for (len = 0; ((r + len) & sm1) != w; len++)
+                if (buffer[(r+len) & sm1] == 0) break;
+
+            if (((len + r) & sm1) == w) return false;
+            len++; // Account for NUL byte
+            if (!str) return true;
+
+            for (std::size_t l = 0; l < len; l++)
+                str[l] = buffer[(r + l) & sm1];
+
+            r = (r + len) & sm1;
+            return true;
+        }
+        /** Load a pointer without VLC decoding */
+        bool load(const void *& ptr)
+        {
+            uintptr_t p = {};
+            if (!loadType(p)) return false;
+            ptr = (const void*)p;
+            return true;
+        }
+        bool load(const char * ptr)
+        {
+            static_assert(sizeof(ptr) == sizeof(void*), "You shouldn't use this to load a string, instead use loadString");
+            return false;
+        }
+
+        bool load(double & i) { return loadType(i); }
+        bool load(long double & i) { return loadType(i); }
+
+        /** Check if the data at position readPos match exactly the given value.
+            @return true if it does and increase readPos by the required size in that case for the next value type.
+                            else it returns false and doesn't modify readPos */
+        bool matchValue(uint32 & readPos, const auto & val)
+        {
+            uint32 rSave = r;
+            r = readPos;
+            auto tmp = val;
+            if (!load(tmp) || tmp != val) { r = rSave; return false; }
+            readPos = r;
+            r = rSave;
+            return true;
+        }
+        /** Check if the data at position readPos match exactly the given value.
+            @return true if it does and increase readPos by the required size in that case for the next value type.
+                            else it returns false and doesn't modify readPos */
+        bool matchValue(uint32 & readPos, void * val)
+        {
+            uint32 rSave = r;
+            r = readPos;
+            const void * tmp = 0;
+            if (!load(tmp) || tmp != val) { r = rSave; return false; }
+            readPos = r;
+            r = rSave;
+            return true;
+        }
+        /** Check if the data at position readPos match exactly the given value.
+            @return true if it does and increase readPos by the required size in that case for the next value type.
+                            else it returns false and doesn't modify readPos */
+        bool matchValue(uint32 & readPos, const char * val, const std::size_t & len)
+        {
+            uint32 rSave = r;
+            r = readPos;
+            std::size_t expLen = 0;
+            if (!loadString(nullptr, expLen) || expLen != (len+1)) { r = rSave; return false; }
+            // Then compare the string itself to match, ignoring the last 0 sentinel that might not be present in the string itself
+            if (memcmp(val, &buffer[r], std::min((uint32)len - 1, sm1 - r + 1))) { r = rSave; return false; }
+            if (len - 1 > (sm1 - r + 1) && memcmp(&val[sm1 - r + 1], buffer, len - 1 - (sm1 - r + 1))) { r = rSave; return false; }
+            readPos = (r + len + 1) & sm1;
+            r = rSave;
+            return true;
+        }
+
+        /** Generic load a value from the buffer */
+        template<typename T>
+        bool loadTypeAt(const uint32 pos, T & val)
+        {
+            const uint8 * head = 0, * tail = 0;
+            uint32 sh = 0, st = 0;
+            uint32 rSave = r; r = pos & sm1;
+            if (!load(sizeof(val), head, sh, tail, st)) { r = rSave; return false; }
+            r = rSave;
+            memcpy((uint8*)&val, head, sh);
+            memcpy((uint8*)&val + sh, tail, st);
+            return true;
+        }
+
+        /** The generic save function for the logs */
+        template <typename T>
+        bool saveTypeAt(const uint32 pos, const T val)
+        {
+            uint32 wSave = w; w = pos & sm1;
+            bool ret = save((const uint8*)&val, sizeof(val));
+            w = wSave;
+            return ret;
+        }
+
+        bool duplicateData(const uint32 from, const uint32 to)
+        {
+            uint32 wSave = w;
+            if (!save(&buffer[from], std::min((uint32)to - from, sm1 - from))) { w = wSave; return false; }
+            if (to < from && !save(buffer, to)) { w = wSave; return false; }
+            return true;
+        }
+
+        inline bool consume(const uint32 s) { if (getSize() <= s) return false; r = (r + s) & sm1; return true; }
+
+        /** Build the ring buffer */
+        RingBuffer() : r(0), w(0)
+        {
+            static_assert(!(sizePowerOf2 & (sizePowerOf2 - 1)), "Size must be a power of two");
+            static_assert(sizePowerOf2 > 32, "A minimum size is required");
+        }
+    };
+
+}
+
+#endif

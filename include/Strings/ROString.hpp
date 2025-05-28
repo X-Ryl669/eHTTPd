@@ -59,6 +59,13 @@ public:
     ROString trimRight(const char ch) const { size_t len = length; while(len > 1 && data && data[len - 1] == ch) len--; return ROString(data, (int)len); }
     /** Trim the string from the given char (and direction) */
     ROString trimLeft(const char ch) const { size_t len = length; while(len > 1 && data && data[length - len] == ch) len--; return ROString(data + (length - len), (int)len); }
+    /** Trim the string from the given char (and direction) */
+    ROString Trim(const char ch) const {
+        size_t len = length, len2;
+        while(len > 1 && data && data[len - 1] == ch) len--;
+        len2 = len; while(len2 > 1 && data && data[len - len2] == ch) len2--;
+        return ROString(data + (len - len2), (int)len2);
+    }
     /** Trim the beginning of string from any char in the given array */
     ROString trimmedLeft(const char* chars, size_t nlen = 0) const
     {
@@ -335,14 +342,14 @@ public:
     /** Compute the hash of the string using the h = Recurse(x + h * 33) + 5381 formula */
     uint32 hash() const { uint32 ret = 5381; for (size_t i = length; i != 0; i--) ret = data[i-1] + ret * 257; return ret; }
     /** Compare a string with another one, return -1 if less, 0 if equal, or +1 if more */
-    constexpr int compare(const char * c) const { return strncmp(data, c, length); }
+    constexpr int compare(const char * c) const { return CompileTime::strncmp(data, c, length); }
     /** Compare a string with another one, return -1 if less, 0 if equal, or +1 if more */
     constexpr int compareCaseless(const char * c) const { return CompileTime::strncasecmp(data, c, length); }
 
     // Construction and operators
 public:
     /** Default constructor */
-    constexpr ROString(const char* _data = 0, const int _length = -1) : data(_data), length(_length == -1 ? (_data ? strlen(_data) : 0) : (size_t)_length) { }
+    constexpr ROString(const char* _data = 0, const int _length = -1) : data(_data), length(_length == -1 ? (_data ? CompileTime::strlen(_data) : 0) : (size_t)_length) { }
     /** Constant string build */
     template <size_t N>
     constexpr ROString(const char (&_data)[N]) : data(_data), length(N-1) { }
@@ -353,7 +360,7 @@ public:
     /** Compare operator */
     constexpr inline bool operator == (const ROString & copy) const { return length == copy.length && memcmp(data, copy.data, length) == 0; }
     /** Compare operator */
-    constexpr inline bool operator == (const char* copy) const { return length == strlen(copy) && memcmp(data, copy, length) == 0; }
+    constexpr inline bool operator == (const char* copy) const { return length == CompileTime::strlen(copy) && memcmp(data, copy, length) == 0; }
     /** Compare operator */
     template <size_t N> constexpr inline bool operator == (const char (&copy)[N]) const { return length == N-1 && memcmp(data, copy, length) == 0; }
     /** Inverted compare operator */

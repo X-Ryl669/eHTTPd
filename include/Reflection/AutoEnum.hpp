@@ -250,15 +250,15 @@ namespace Refl
 //        return *[]<std::size_t ... i>(std::index_sequence<i ...>) constexpr { constexpr static std::array<const char*, maxV+1> values = {Refl::enum_raw_name_only<E, (int)i>()...}; return &values; }(std::make_index_sequence<maxV+1>{});
     }
     template <Enum E>
-    inline const char * toString(E m)
+    inline constexpr const char * toString(E m)
     {
         constexpr auto & sup = _supports<E>();
-        return (unsigned)m < sup.size() ? sup[m] : "";
+        return (unsigned)m < sup.size() ? sup[(size_t)m] : "";
     }
     template <Enum E>
     struct Opt
     {
-        Opt(E e) : value(e) {}
+        Opt(E e) : value((Type)e) {}
         Opt() : value((Type)-1) {}
 
         explicit operator bool() const { return value != (Type)-1; }
@@ -272,7 +272,7 @@ namespace Refl
     /** Convert a read-only string view to an enum or -1 if not found. Use Opt::orElse or Opt::isValid to check if the value is valid or not.
         This method is using a dichotomic search in the enumeration string value. The enumeration must not have a negative value (should start from 0) and be sorted alphabetically */
     template <Enum E>
-    inline Opt<E> fromString(const ROString & string)
+    inline constexpr Opt<E> fromString(const ROString & string)
     {
         // A dichotomic search into an enum name to value not performing O(log N) search here
         constexpr auto & sup = _supports<E>();
@@ -286,12 +286,14 @@ namespace Refl
                 int c = string.compare(sup[m]);
                 if (c == 0) return Opt<E>{(E)m};
                 if (c > 0) l = m + 1;
-                else r = m - 1;
+                else if (m) r = m - 1;
+                else break;
             } else {
                 int c = string.compareCaseless(sup[m]);
                 if (c == 0) return Opt<E>{(E)m};
                 if (c > 0) l = m + 1;
-                else r = m - 1;
+                else if (m) r = m - 1;
+                else break;
             }
         }
         return Opt<E>{};

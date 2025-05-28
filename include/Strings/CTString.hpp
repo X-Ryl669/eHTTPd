@@ -62,6 +62,26 @@ namespace CompileTime
         }
         return 0;
     }
+    constexpr int strncmp(const char *s1, const char *s2, int n)
+    {
+        if (n && s1 != s2)
+        {
+            do {
+                int d = *s1 - *s2;
+                if (d || *s1 == '\0' || *s2 == '\0') return d;
+                s1++;
+                s2++;
+            } while (--n);
+        }
+        return 0;
+    }
+
+    constexpr size_t strlen(const char *s1)
+    {
+        size_t i = 0;
+        while(s1[i]) ++i;
+        return i;
+    }
 
 }
 
