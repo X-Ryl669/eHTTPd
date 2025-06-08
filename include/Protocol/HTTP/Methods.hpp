@@ -46,6 +46,16 @@ namespace Protocol::HTTP
         PUT     = 5,
     };
 
+    /** The method mask to use in routes */
+    struct MethodsMask
+    {
+        uint32 mask;
+
+        static constexpr inline uint32 makeMask(Method method) { return method >= Method::DELETE ? (1U<<(uint32)method) : 0; }
+        /** This will hopefully break compilation if used with no method. You need one method at least here */
+        template <typename ... Methods> constexpr MethodsMask(Methods ... methods) : mask(0) { mask = (makeMask(methods) | ...); }
+    };
+
 
     /////////////////////////////////////////////////////////////////////////////////////////////////////
     ////////////////////////////////  Headers below  ////////////////////////////////////////////////////

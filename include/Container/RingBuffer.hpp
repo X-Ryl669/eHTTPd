@@ -6,17 +6,10 @@
 
 namespace Container
 {
-    /** A Power-Of-2 ring buffer (aka Circular Buffer).
-    This is used to store the logs, compressed (the recipe for the log, not the log itself).
-    Then this is also used to recreate a textual representation of the log stored inside.
-
-    The idea is to store variable length logs like this:
-    LogItem [Opt Filename] [Opt Line as VLC] [Opt Mask] [Optional Argument list] LogItem... */
+    /** A Power-Of-2 ring buffer (aka Circular Buffer). */
     template <std::size_t sizePowerOf2>
     struct RingBuffer
     {
-        /** The mutex used to protect this structure, manipulated from outside */
-        Mutex                           mutex;
         /** Read and write pointer in the ring buffer */
         uint32                          r, w;
         uint32                          lastLogPos = sizePowerOf2;
@@ -44,10 +37,7 @@ namespace Container
             if (freeSize() >= size) return true;
             // Clean the logs recursively until we have enough space
             while (freeSize() < size)
-                // The idea, here is to clean log one by one until there's enough space for the new log.
-                // In order to do so, we have to parse the log using the CompileTime's namespace function.
-                // But unlike when generating the log, we only care about extracting specifiers type so we can
-                // call or mimick the load function for the arguments matching the specifiers
+                // The idea, here is to clean item one by one until there's enough space for the new item.
                 if (!extract()) return false;
 
             return true;
@@ -247,6 +237,9 @@ namespace Container
 
         inline bool consume(const uint32 s) { if (getSize() <= s) return false; r = (r + s) & sm1; return true; }
 
+        // Not implemented for non typed items. This need more work
+        inline bool extract() { return false; }
+
         /** Build the ring buffer */
         RingBuffer() : r(0), w(0)
         {
@@ -254,6 +247,70 @@ namespace Container
             static_assert(sizePowerOf2 > 32, "A minimum size is required");
         }
     };
+
+    /** A Power-Of-2 stack buffer.
+        Unlike the ring buffer, this doesn't wrap around if full.
+        Thus, data stored in the buffer is always contiguous. */
+    template <std::size_t sizePowerOf2>
+    struct FixedSize
+    {
+        /** Write pointer in the buffer */
+        uint32                          w;
+        /** The buffer to write packets into */
+        uint8                           buffer[sizePowerOf2];
+
+        /** Get the consumed size in the buffer */
+        inline uint32 getSize() const { return w; }
+        /** Get the available size in the buffer */
+        inline uint32 freeSize() const { return sizePowerOf2 - getSize(); }
+        /** Fetch the current read position (used to restore the read pointer later on on rollback) */
+        inline uint32 fetchWritePos() const { return w; }
+        /** Get the current head in the buffer */
+        inline const uint8 * getHead() const { return &buffer[w]; }
+        /** Rollback the saved write position */
+        inline void rollbackWrite(const uint32 writePos) { if (writePos >= sizePowerOf2) return; w = writePos; }
+        /** Check if the buffer is full (and, if configured to do so, clean the buffer until there's enough free space) */
+        bool canFit(const uint32 size)
+        {
+            if (size > sizePowerOf2) return false; // Can't store the data anyway
+            if (freeSize() >= size) return true;
+            return false;
+        }
+        /** Add data to this buffer (no allocation is done at this time) */
+        bool save(const uint8 * packet, uint32 size)
+        {
+            if (!canFit(size)) return false;
+            memcpy((buffer + w), packet, size);
+            w += size;
+            return true;
+        }
+        /** Save a string to the buffer
+            @param str  A pointer on the C string to save
+            @param len  If non zero, contains the actual number of bytes to save (don't include the final NUL)
+                        Else, compute the string length from the actual string size.
+            @return A pointer on the saved string (a copy) that will persist as long as this instance */
+        const char * saveString(const char * str, std::size_t len = 0)
+        {
+            if (!len) len = strlen(str);
+            uint8 c = 0;
+            if (save((const uint8*)str, len))
+                return (const char*)&buffer[w - len];
+            return 0;
+        }
+        /** Reset the buffer */
+        void reset() { w = 0;
+#ifdef ParanoidServer
+            Zero(buffer);
+#endif
+        }
+
+        /** Build the ring buffer */
+        FixedSize() : w(0)
+        {
+            static_assert(sizePowerOf2 > 32, "A minimum size is required");
+        }
+    };
+
 
 }
 

@@ -15,7 +15,7 @@ namespace Network::Servers::HTTP
         /** The received request line */
         RequestLine request;
         /** The expected header map. Unexpected headers are ignored */
-        RequestHeaderLines & headers;
+     //   RequestHeaderLines & headers;
 
 
     };

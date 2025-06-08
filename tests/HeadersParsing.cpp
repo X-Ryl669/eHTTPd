@@ -7,6 +7,8 @@
 // We need request lines too for testing
 #include "Protocol/HTTP/RequestLine.hpp"
 
+#include "Container/CTVector.hpp"
+
 using namespace Protocol::HTTP;
 
 
@@ -31,6 +33,8 @@ bool testEqual(const char * a, const char * b)
     return true;
 }
 
+template <Headers E>
+struct MakeRequest { typedef Protocol::HTTP::RequestHeader<E> Type; };
 
 int main()
 {
@@ -52,6 +56,9 @@ int main()
     if (!testEqual(Method::POST, fromString<Method>("POST"))) return 1;
     if (!testEqual(Method::PUT, fromString<Method>("PUT"))) return 1;
     if (!testEqual(Method::OPTIONS, fromString<Method>("OPTIONS"))) return 1;
+
+    if (MethodsMask{Method::DELETE, Method::GET}.mask != 3) return 1;
+
 
     // Headers
     if (!testEqual("Accept",                        toString(Headers::Accept))) return 1;
@@ -270,6 +277,19 @@ int main()
     RequestHeader<Headers::Cookie> co;
     if (co.parse(headersLine[10]) != EndOfRequest) return 1;
     printf("%s found: %.*s (both: %.*s)\n", toString(co.header), co.parsed.value.getLength(), co.parsed.value.getData(), co.parsed.findValueFor("both").getLength(), co.parsed.findValueFor("both").getData());
+
+
+
+
+    auto j = Container::makeTypes<MakeRequest, std::array<Headers, 4>{Headers::TransferEncoding, Headers::AcceptEncoding, Headers::Connection, Headers::Cookie}>();
+    auto k = Container::withMinimumTypes<MakeRequest, std::array<Headers, 4>{Headers::TransferEncoding, Headers::ContentEncoding, Headers::Connection, Headers::Cookie}, std::array<Headers, 2>{Headers::Authorization, Headers::Upgrade}>();
+
+    constexpr auto l = Container::getUnique<std::array<Headers, 4>{Headers::TransferEncoding, Headers::ContentEncoding, Headers::Connection, Headers::Cookie}, std::array<Headers, 3>{Headers::Authorization, Headers::Upgrade, Headers::Cookie}>();
+    printf("Size: %d [", l.size());
+    for (auto e: l) printf("%s, ", toString(e));
+    printf("]\n");
+    //
+    // static_assert(j == k);
 
 
     fprintf(stdout, "OK\n");

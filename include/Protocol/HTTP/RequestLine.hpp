@@ -6,6 +6,9 @@
 // We need methods too
 #include "Methods.hpp"
 
+// We need TmpString too to persist string and other dynamically sized content to a client's receive buffer
+#include "../../Container/TmpString.hpp"
+
 #if defined(MaxSupport)
   // We need path normalization
   #include "../../Path/Normalization.hpp"
@@ -21,13 +24,23 @@ namespace Protocol::HTTP
         MoreData = 1,
     };
 
+    /** This interface is implemented in structure that take a reference on a temporary buffer and that need to save it to a persistant buffer */
+    struct PersistantTag{};
+    template <typename Client>
+    struct PersistBase : public PersistantTag
+    {
+        template <std::size_t N>
+        inline bool persist(Container::FixedSize<N> & buffer) { return static_cast<Client*>(this)->persist(buffer); }
+    };
+
     /** A typical Query part in the URL is what follow the question mark in this: "?a=b&c[]=3&c[]=4&d"
         This class allows to locate keys and value and returns them one by one.
         The URI isn't URL decoded, here, it can be done in the RequestURI's function too by using the normalize method */
-    struct Query
+    struct Query : public PersistBase<Query>
     {
         ROString query;
 
+    public: template <typename T> inline bool persist(T & buffer) { return Container::persistString(query, buffer); }
         // Interface
     public:
         /** Get the value for the given key
@@ -76,6 +89,7 @@ namespace Protocol::HTTP
             }
             return false;
         }
+        Query(const ROString & query) : query(query) {}
     };
 
     /** For the sake of compactness, this isn't a full URI parsing scheme. The request URI for a server that's not a proxy is
@@ -83,12 +97,14 @@ namespace Protocol::HTTP
             '*'  (typically for OPTIONS)
          or absolute path (including query parameters if any)
     */
-    struct RequestURI
+    struct RequestURI  : public PersistBase<RequestURI>
     {
         // Members
     public:
         /** The absolute path given to the URI */
         ROString absolutePath;
+
+    public: template <typename T> inline bool persist(T & buffer) { return Container::persistString(absolutePath, buffer); }
 
         // Interface
     public:
@@ -136,6 +152,8 @@ namespace Protocol::HTTP
             input = input.splitAt(3);
             return MoreData;
         }
+
+        void reset() { method = Method::Invalid; URI = ROString(); version = Version::Invalid; }
     };
 
     namespace RequestType
@@ -150,13 +168,14 @@ namespace Protocol::HTTP
         };
 
         /** String value (opaque) */
-        struct StringValue : public ValueBase
+        struct StringValue : public ValueBase, public PersistBase<StringValue>
         {
             ROString value;
             virtual ParsingError parseFrom(ROString & val) {
                 value = val.Trim(' ');
                 return EndOfRequest;
             }
+            public: template <typename T> inline bool persist(T & buffer) { return Container::persistString(value, buffer); }
         };
         template <Headers> struct ValueMap { typedef StringValue ExpectedType; };
 
@@ -228,7 +247,7 @@ namespace Protocol::HTTP
             }
         };
         /** Enum value that stores the key and value after ';' and before '=' */
-        template <typename Enum> struct EnumKeyValue : public ValueBase
+        template <typename Enum> struct EnumKeyValue : public ValueBase, public PersistBase<EnumKeyValue<Enum>>
         {
             Enum value;
             ROString attributes;
@@ -249,6 +268,8 @@ namespace Protocol::HTTP
                 if (v[0] != '=') return ROString();
                 return v.trimmedLeft("= ").upToFirst(";").trimRight(' ');
             }
+            public: template <typename T> inline bool persist(T & buffer) { return Container::persistString(attributes, buffer); }
+
         };
 
         template <typename E, size_t N, bool strict = false>
@@ -288,8 +309,6 @@ namespace Protocol::HTTP
         template <> struct ValueMap<Headers::TransferEncoding>  { typedef ValueList<EnumValueToken<Encoding>, 4> ExpectedType; };
         template <> struct ValueMap<Headers::Upgrade>           { typedef StringValue ExpectedType; };
         template <> struct ValueMap<Headers::UserAgent>         { typedef StringValue ExpectedType; };
-
-
     }
 
     struct GenericHeaderParser
@@ -321,7 +340,7 @@ namespace Protocol::HTTP
     };
 
     /** Request header line parsing, as specified in section 5.3 */
-    struct GenericRequestHeaderLine
+    struct GenericRequestHeaderLine : public PersistBase<GenericRequestHeaderLine>
     {
         /** The header name */
         ROString header;
@@ -343,6 +362,8 @@ namespace Protocol::HTTP
         /** Extract header name type
             @return InvalidHeader upon unknown or invalid header */
         Headers getHeaderType() const { return Refl::fromString<Headers>(header).orElse(Headers::Invalid); }
+
+    public: template <typename T> inline bool persist(T & buffer) { return Container::persistString(header, buffer) && Container::persistString(value, buffer);  }
     };
 
     struct RequestHeaderBase
@@ -360,6 +381,11 @@ namespace Protocol::HTTP
 
         virtual bool acceptHeader(ROString & header) const { return true; }
         virtual ParsingError acceptValue(ROString & input, ROString & value) { return GenericHeaderParser::parseValue(input, value); }
+    };
+
+    struct InvalidRequestHeaderBase : public RequestHeaderBase
+    {
+        virtual ParsingError acceptValue(ROString & input, ROString & value) { return MoreData; }
     };
 
     /** Type specified request header line and value */
