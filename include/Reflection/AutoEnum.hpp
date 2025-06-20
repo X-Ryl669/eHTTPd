@@ -241,6 +241,7 @@ namespace Refl
     namespace Details { template <Enum E, std::size_t ... i > struct Reflect { static constexpr std::array<const char*, sizeof...(i)> values = {Refl::enum_raw_name_only<E, (int)i>()...}; }; }
 
     template <Enum E> constexpr bool isCaseSensitive = true;
+    template <Enum E> constexpr bool isSorted = false;
 
     template <Enum E>
     constexpr inline auto &_supports()
@@ -274,26 +275,39 @@ namespace Refl
     template <Enum E>
     inline constexpr Opt<E> fromString(const ROString & string)
     {
-        // A dichotomic search into an enum name to value not performing O(log N) search here
-        constexpr auto & sup = _supports<E>();
-        const char * p = string.getData();
-        size_t l = 0, r = sup.size() - 1;
-        while(l <= r)
-        {
-            size_t m = l + (r - l) / 2;
-            // Check if any transform is needed for this enumeration type
-            if constexpr (isCaseSensitive<E>) {
-                int c = string.compare(sup[m]);
-                if (c == 0) return Opt<E>{(E)m};
-                if (c > 0) l = m + 1;
-                else if (m) r = m - 1;
-                else break;
-            } else {
-                int c = string.compareCaseless(sup[m]);
-                if (c == 0) return Opt<E>{(E)m};
-                if (c > 0) l = m + 1;
-                else if (m) r = m - 1;
-                else break;
+        if constexpr (isSorted<E>) {
+            // A dichotomic search into an enum name to value not performing O(log N) search here
+            constexpr auto & sup = _supports<E>();
+            const char * p = string.getData();
+            size_t l = 0, r = sup.size() - 1;
+            while(l <= r)
+            {
+                size_t m = l + (r - l) / 2;
+                // Check if any transform is needed for this enumeration type
+                if constexpr (isCaseSensitive<E>) {
+                    int c = string.compare(sup[m]);
+                    if (c == 0) return Opt<E>{(E)m};
+                    if (c > 0) l = m + 1;
+                    else if (m) r = m - 1;
+                    else break;
+                } else {
+                    int c = string.compareCaseless(sup[m]);
+                    if (c == 0) return Opt<E>{(E)m};
+                    if (c > 0) l = m + 1;
+                    else if (m) r = m - 1;
+                    else break;
+                }
+            }
+        } else {
+            // Enum isn't sorted, so let's use a plain old O(N) search here
+            constexpr auto & sup = _supports<E>();
+            for (auto i = 0; i < sup.size(); i++)
+            {
+                if constexpr (isCaseSensitive<E>) {
+                    if (!string.compare(sup[i])) return Opt<E>{(E)i};
+                } else {
+                    if (!string.compareCaseless(sup[i])) return Opt<E>{(E)i};
+                }
             }
         }
         return Opt<E>{};

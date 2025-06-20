@@ -572,6 +572,24 @@ namespace Refl
     template <> constexpr bool isCaseSensitive<Protocol::HTTP::Charset> = false;
     template <> constexpr bool isCaseSensitive<Protocol::HTTP::Language> = false;
 
+    template <> constexpr bool isSorted<Protocol::HTTP::Method> = true;
+    template <> constexpr bool isSorted<Protocol::HTTP::Headers> = true;
+    template <> constexpr bool isSorted<Protocol::HTTP::Charset> = true;
+    template <> constexpr bool isSorted<Protocol::HTTP::Encoding> = true;
+    template <> constexpr bool isSorted<Protocol::HTTP::CacheControl> = true;
+    template <> constexpr bool isSorted<Protocol::HTTP::Connection> = true;
+    template <> constexpr bool isSorted<Protocol::HTTP::Language> = true;
+#if defined(MaxSupport)
+    template <> constexpr bool isSorted<Protocol::HTTP::ApplicationType> = true;
+    template <> constexpr bool isSorted<Protocol::HTTP::AudioType> = true;
+    template <> constexpr bool isSorted<Protocol::HTTP::FontType> = true;
+    template <> constexpr bool isSorted<Protocol::HTTP::ImageType> = true;
+    template <> constexpr bool isSorted<Protocol::HTTP::ModelType> = true;
+    template <> constexpr bool isSorted<Protocol::HTTP::MultipartType> = true;
+    template <> constexpr bool isSorted<Protocol::HTTP::TextType> = true;
+#endif
+    template <> constexpr bool isSorted<Protocol::HTTP::MIMEType> = true;
+
     namespace Details { template <Enum E, std::size_t ... i > struct ReflectHTTPHeader { static constexpr std::array<const char*, sizeof...(i)> values = {CompileTime::str_ref<Protocol::HTTP::makeHTTPHeader<enum_raw_name_only_str<E, (int)i>()>()>{}.data...}; }; }
 #if defined(MaxSupport)
     namespace Details { template <Enum E, std::size_t ... i > struct ReflectMIMEHeader { static constexpr std::array<const char*, sizeof...(i)> values = {CompileTime::str_ref<Protocol::HTTP::makeMIMEHeader<enum_raw_name_only_str<E, (int)i>()>()>{}.data...}; }; }

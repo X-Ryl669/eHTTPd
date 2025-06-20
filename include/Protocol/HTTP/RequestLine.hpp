@@ -118,10 +118,12 @@ namespace Protocol::HTTP
         RequestURI & operator = (const ROString & path) { absolutePath = path; return *this; }
 #if defined(MaxSupport)
         bool normalizePath() { return Path::normalize(absolutePath, true); }
+#else
+        bool normalizePath() { return true; }
 #endif
     };
     /** Request line is defined as METHOD SP Request-URI SP HTTP-Version CRLF */
-    struct RequestLine
+    struct RequestLine : PersistBase<RequestLine>
     {
         /** The requested method */
         Method      method = Method::Invalid;
@@ -130,6 +132,7 @@ namespace Protocol::HTTP
         /** The protocol version */
         Version     version = Version::Invalid;
 
+    public: template <typename T> inline bool persist(T & buffer) { return URI.persist(buffer); }
         // Interface
     public:
         /** Parse the given data stream */
@@ -149,7 +152,7 @@ namespace Protocol::HTTP
             version = input[0] == '1' ? Version::HTTP1_1 : Version::HTTP1_0;
 
             if (input[1] != '\r' || input[2] != '\n') return InvalidRequest;
-            input = input.splitAt(3);
+            (void)input.splitAt(3);
             return MoreData;
         }
 
@@ -379,6 +382,7 @@ namespace Protocol::HTTP
             return acceptValue(input, rawValue);
         }
 
+        ParsingError acceptValue(ROString & input) { return acceptValue(input, rawValue); }
         virtual bool acceptHeader(ROString & header) const { return true; }
         virtual ParsingError acceptValue(ROString & input, ROString & value) { return GenericHeaderParser::parseValue(input, value); }
     };

@@ -14,7 +14,7 @@ namespace Protocol::HTTP
     /** Status or error code */
     enum class Code
     {
-        InvalidCode             = -1,
+        Invalid                 = -1,
 
         Continue                = 100,
 
