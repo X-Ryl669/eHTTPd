@@ -1,13 +1,9 @@
 #ifndef hpp_RequestLine_hpp
 #define hpp_RequestLine_hpp
 
-// We need a string-view like class for avoiding useless copy here
-#include "../../Strings/ROString.hpp"
-// We need methods too
-#include "Methods.hpp"
+// We need header map, ParsingError and persistence interface
+#include "HeaderMap.hpp"
 
-// We need TmpString too to persist string and other dynamically sized content to a client's receive buffer
-#include "../../Container/TmpString.hpp"
 
 #if defined(MaxSupport)
   // We need path normalization
@@ -17,21 +13,7 @@
 // The REQUEST line is defined in section 5.1 in RFC2616
 namespace Protocol::HTTP
 {
-    enum ParsingError
-    {
-        InvalidRequest = -1,
-        EndOfRequest = 0,
-        MoreData = 1,
-    };
 
-    /** This interface is implemented in structure that take a reference on a temporary buffer and that need to save it to a persistant buffer */
-    struct PersistantTag{};
-    template <typename Client>
-    struct PersistBase : public PersistantTag
-    {
-        template <std::size_t N>
-        inline bool persist(Container::FixedSize<N> & buffer) { return static_cast<Client*>(this)->persist(buffer); }
-    };
 
     /** A typical Query part in the URL is what follow the question mark in this: "?a=b&c[]=3&c[]=4&d"
         This class allows to locate keys and value and returns them one by one.
@@ -159,160 +141,6 @@ namespace Protocol::HTTP
         void reset() { method = Method::Invalid; URI = ROString(); version = Version::Invalid; }
     };
 
-    namespace RequestType
-    {
-        template <Headers> struct ValueMap;
-
-        /** Link a header with its type (with serializing function for both type) */
-        struct ValueBase
-        {
-            virtual ParsingError parseFrom(ROString & value) = 0;
-            template <Headers h, typename T> T * as() { if constexpr(std::is_same_v<typename ValueMap<h>::ExpectedType, T>) { return static_cast<typename ValueMap<h>::ExpectedType*>(this); } else return (void*)0; }
-        };
-
-        /** String value (opaque) */
-        struct StringValue : public ValueBase, public PersistBase<StringValue>
-        {
-            ROString value;
-            virtual ParsingError parseFrom(ROString & val) {
-                value = val.Trim(' ');
-                return EndOfRequest;
-            }
-            public: template <typename T> inline bool persist(T & buffer) { return Container::persistString(value, buffer); }
-        };
-        template <Headers> struct ValueMap { typedef StringValue ExpectedType; };
-
-        /** Key value in the form "name=value" */
-        struct KeyValue : public StringValue
-        {
-            ROString findValueFor(const ROString & key)
-            {
-                ROString v = value.fromFirst(key).trimLeft(' ');
-                if (v[0] != '=') return ROString();
-                return v.trimmedLeft("= ").upToFirst(";").trimRight(' ');
-            }
-        };
-
-        /** Unsigned integer value (opaque) */
-        struct UnsignedValue : public ValueBase
-        {
-            size_t value;
-            virtual ParsingError parseFrom(ROString & val) {
-                value = (size_t)val.Trim(' ');
-                return EndOfRequest;
-            }
-        };
-
-        /** Simple enum value for the given type */
-        template <typename Enum, bool strict = false> struct EnumValue : public ValueBase
-        {
-            Enum value;
-            virtual ParsingError parseFrom(ROString & val) {
-                value = Refl::fromString<Enum>(val.Trim(' ')).orElse(static_cast<Enum>(-1));
-                // If we find some unknown value, we don't return an error here, simply continue parsing
-                return value != (static_cast<Enum>(-1)) ? EndOfRequest : (strict ? InvalidRequest : EndOfRequest);
-            }
-        };
-        /** Simple enum value for the given type */
-        template <typename Enum> struct StrictEnumValue : public EnumValue<Enum, true> {};
-
-        struct EnumValueWithToken
-        {
-            /** Extract the enum and token value from the given input value */
-            static ParsingError parseFrom(ROString & val, ROString & e, ROString & token)
-            {
-                size_t p = val.findAnyChar(";,", 0, 2);
-                if (p != val.getLength() && val[p] == ';') {
-                    e = val.splitAt(p).Trim(' ');
-                    p = val.findAnyChar(",", 0, 1);
-                    token = val.splitAt(p).Trim(' ');
-                    val = val.trimLeft(',');
-                    return val ? MoreData : EndOfRequest;
-                }
-                e = val.splitAt(p).Trim(' ');
-                val = val.trimLeft(',');
-                token = ROString();
-                return val ? MoreData : EndOfRequest;
-            }
-        };
-        /** Enum value with quality factor ";q=[.0-9]+,token="
-            The quality factor is ignored and so is any token */
-        template <typename Enum> struct EnumValueToken : public ValueBase
-        {
-            Enum value;
-            virtual ParsingError parseFrom(ROString & val)
-            {
-                ROString v, t;
-                ParsingError err = EnumValueWithToken::parseFrom(val, v, t);
-                if (err == InvalidRequest) return err;
-                value = Refl::fromString<Enum>(v).orElse(static_cast<Enum>(-1));
-                return err;
-            }
-        };
-        /** Enum value that stores the key and value after ';' and before '=' */
-        template <typename Enum> struct EnumKeyValue : public ValueBase, public PersistBase<EnumKeyValue<Enum>>
-        {
-            Enum value;
-            ROString attributes;
-            virtual ParsingError parseFrom(ROString & val)
-            {
-                ROString v;
-                ParsingError err = EnumValueWithToken::parseFrom(val, v, attributes);
-                if (err == InvalidRequest) return err;
-                // Fix case with value containing the attribute itself
-                if (!attributes) { attributes = v; v = attributes.splitUpTo("="); }
-                value = Refl::fromString<Enum>(v).orElse(static_cast<Enum>(-1));
-                return err;
-            }
-
-            ROString findAttributeValueFor(const ROString & key)
-            {
-                ROString v = attributes.fromFirst(key).trimLeft(' ');
-                if (v[0] != '=') return ROString();
-                return v.trimmedLeft("= ").upToFirst(";").trimRight(' ');
-            }
-            public: template <typename T> inline bool persist(T & buffer) { return Container::persistString(attributes, buffer); }
-
-        };
-
-        template <typename E, size_t N, bool strict = false>
-        struct ValueList : public ValueBase
-        {
-            E    value[N];
-            size_t count = 0;
-            virtual ParsingError parseFrom(ROString & val) {
-                ParsingError err;
-                for(count = 0; count < N;) {
-                    err = value[count++].parseFrom(val);
-                    if (err == InvalidRequest) { count--; return err; }
-                    if (err == EndOfRequest) return EndOfRequest;
-                }
-                return count < N ? MoreData : (strict ? InvalidRequest : MoreData); // Is there too much allowed element and we don't support them?
-            }
-        };
-
-
-        template <> struct ValueMap<Headers::Accept>            { typedef ValueList<EnumValueToken<MIMEType>, 16, true> ExpectedType; };
-        template <> struct ValueMap<Headers::AcceptCharset>     { typedef ValueList<EnumValueToken<Charset>, 4> ExpectedType; };
-        template <> struct ValueMap<Headers::AcceptEncoding>    { typedef ValueList<EnumValueToken<Encoding>, 4> ExpectedType; };
-        template <> struct ValueMap<Headers::AcceptLanguage>    { typedef ValueList<EnumKeyValue<Language>, 8> ExpectedType; };
-        template <> struct ValueMap<Headers::Authorization>     { typedef StringValue ExpectedType; };
-        template <> struct ValueMap<Headers::CacheControl>      { typedef ValueList<EnumKeyValue<CacheControl>, 4> ExpectedType; };
-        template <> struct ValueMap<Headers::Connection>        { typedef StrictEnumValue<Connection> ExpectedType; };
-        template <> struct ValueMap<Headers::ContentEncoding>   { typedef ValueList<EnumValueToken<Encoding>, 2> ExpectedType; };
-        template <> struct ValueMap<Headers::ContentType>       { typedef EnumKeyValue<MIMEType> ExpectedType; };
-        template <> struct ValueMap<Headers::ContentLength>     { typedef UnsignedValue ExpectedType; };
-        template <> struct ValueMap<Headers::Cookie>            { typedef KeyValue ExpectedType; };
-        template <> struct ValueMap<Headers::Date>              { typedef StringValue ExpectedType; };
-        template <> struct ValueMap<Headers::Host>              { typedef StringValue ExpectedType; };
-        template <> struct ValueMap<Headers::Origin>            { typedef StringValue ExpectedType; };
-        template <> struct ValueMap<Headers::Range>             { typedef KeyValue ExpectedType; };
-        template <> struct ValueMap<Headers::Referer>           { typedef StringValue ExpectedType; };
-        template <> struct ValueMap<Headers::TE>                { typedef ValueList<EnumValueToken<Encoding>, 4> ExpectedType; };
-        template <> struct ValueMap<Headers::TransferEncoding>  { typedef ValueList<EnumValueToken<Encoding>, 4> ExpectedType; };
-        template <> struct ValueMap<Headers::Upgrade>           { typedef StringValue ExpectedType; };
-        template <> struct ValueMap<Headers::UserAgent>         { typedef StringValue ExpectedType; };
-    }
 
     struct GenericHeaderParser
     {
@@ -396,7 +224,7 @@ namespace Protocol::HTTP
     template <Headers h>
     struct RequestHeader : public RequestHeaderBase
     {
-        typename RequestType::ValueMap<h>::ExpectedType parsed;
+        typename HeaderMap::ValueMap<h>::ExpectedType parsed;
         static constexpr Headers header = h;
 
         /** Check to see if this header is the expected type and in that case, capture the value */
@@ -407,6 +235,53 @@ namespace Protocol::HTTP
             ROString tmp = val;
             val = val.trimRight(' ');
             return parsed.parseFrom(tmp);
+        }
+    };
+
+    template <Headers h>
+    struct AnswerHeader
+    {
+        typename HeaderMap::ValueMap<h>::ExpectedType v;
+        static constexpr Headers header = h;
+
+        bool write(char * buffer, std::size_t & size)
+        {
+            const ROString & s = Refl::toString(header);
+            std::size_t vs = 0;
+            if (!v.write(0, vs)) return false;
+            if (vs == 0) return true; // Skip headers without any value, since it's wrong anyway
+            WriteCheck(buffer, size, s.getLength() + vs + 3);
+            memcpy(buffer, s.getData(), s.getLength()); buffer+= s.getLength();
+            memcpy(buffer, ":", 1); buffer++; vs = size - s.getLength() - 1;
+            if (!v.write(buffer, vs)) return false;
+            memcpy(buffer + vs, "\r\n", 2);
+            return true;
+        }
+
+        template <typename T>
+        void setValue(T && t) { v.value = std::forward<T>(t); }
+
+        bool isSet() const {
+            std::size_t vs = 0;
+            if (!v.write(0, vs)) return false;
+            if (vs == 0) return false; // Skip header without value
+            return true;
+        }
+
+        template <std::size_t N>
+        bool write(Container::TrackedBuffer<N> & buffer)
+        {
+            std::size_t vs = 0;
+            if (!v.write(0, vs)) return false;
+            if (vs == 0) return true; // Skip headers without any value, since it's wrong anyway
+            const ROString & s = Refl::toString(header);
+            if (buffer.used + vs + 3 + s.getLength() > N) return false;
+
+            if (!buffer.save(s.getData(), s.getLength())) return false;
+            if (!buffer.save(":", 1)) return false;
+            if (!v.write(&buffer.buffer[buffer.used], vs)) return false;
+            buffer.used += vs;
+            return buffer.save("\r\n", 2);
         }
     };
 }

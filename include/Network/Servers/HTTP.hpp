@@ -13,6 +13,9 @@
 // We need compile time vectors here to cast some magical spells on types
 #include "../../Container/CTVector.hpp"
 #include "../../Container/RingBuffer.hpp"
+// We need streams too
+#include "../../Streams/Streams.hpp"
+
 #include <type_traits>
 // We need offsetof for making the container_of macro
 #include <cstddef>
@@ -40,6 +43,7 @@ namespace Network::Servers::HTTP
     static constexpr const char EntityTooLargeAnswer[] = "HTTP/1.1 413 Entity too large\r\n\r\n";
     static constexpr const char InternalServerErrorAnswer[] = "HTTP/1.1 500 Internal server error\r\n\r\n";
     static constexpr const char NotFoundAnswer[] = "HTTP/1.1 404 Not found\r\n\r\n";
+    static constexpr const char ChunkedEncoding[] = "Transfer-Encoding: chunked\r\n";
 
     using namespace Protocol::HTTP;
 
@@ -51,146 +55,6 @@ namespace Network::Servers::HTTP
         NeedRefill  = 2,
         Done        = 3,
     };
-
-    /** A client which is linked with a single session.
-        There's a fixed possible number of clients while a server is started to avoid dynamic allocation (and memory fragmentation)
-        Thus a client is identified by its index in the client array */
-    struct Client
-    {
-        /** The client socket */
-        Socket      socket;
-        /** The current parsing status for this client.
-            The state machine is like this:
-            @code
-            [ Invalid ] ==> Request line incomplete => [ ReqLine ]
-            [ ReqLine ] ==> Request line complete => [ RecvHeaders ]
-            [ RecvHeader ] ==> \r\n\r\n found ? => [ HeadersDone ]
-            [ HeadersDone ] ==> Content received? => [ ReqDone ]
-            @endcode */
-        enum ParsingStatus
-        {
-            Invalid = 0,
-            ReqLine,
-            RecvHeaders,
-            HeadersDone,
-            ReqDone,
-
-        } parsingStatus;
-
-        /** The buffer where all the per-request data is saved */
-        Container::FixedSize<ClientBufferSize> sessionBuffer;
-        /** The current receiving buffer */
-        char        recvBuffer[ClientBufferSize * 3];
-        std::size_t recvLength;
-
-        /** The content length for the answer */
-        std::size_t answerLength;
-        Code        replyCode;
-        /** The current request as received and parsed by the server */
-        Protocol::HTTP::RequestLine reqLine;
-
-        bool sendStatus()
-        {
-            char buffer[5] = { };
-            intToStr((int)replyCode, buffer, 10);
-            buffer[3] = ' ';
-
-            socket.send(HTTPAnswer, strlen(HTTPAnswer));
-            socket.send(buffer, strlen(buffer));
-            socket.send(Refl::toString(replyCode), strlen(Refl::toString(replyCode)));
-            socket.send(EOM, 2);
-            return true;
-        }
-        bool sendSize()
-        {
-            static char hdr[] = { ':' };
-            char buffer[sizeof("18446744073709551615")] = { };
-            socket.send(Refl::toString(Headers::ContentLength), strlen(Refl::toString(Headers::ContentLength)));
-            socket.send(hdr, 1);
-            intToStr((int)answerLength, buffer, 10);
-            socket.send(buffer, strlen(buffer));
-            return true;
-        }
-        bool reply(Code statusCode, const ROString & msg, bool close = false)
-        {
-            replyCode = statusCode;
-            if (!sendStatus()) return false;
-            SLog(Level::Info, "Client %s [%.*s](%u): %d%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), msg.getLength(), (int)replyCode, close ? " closed" : "");
-
-            answerLength = msg.getLength();
-            if (!sendSize()) return false;
-            socket.send(EOM, strlen(EOM));
-            if (answerLength) socket.send(msg.getData(), msg.getLength());
-            if (close) reset();
-            return true;
-        }
-
-        bool closeWithError(Code code) { return reply(code, "", true); }
-
-        bool parse() {
-            ROString buffer(recvBuffer, recvLength);
-            switch (parsingStatus)
-            {
-            case Invalid:
-            {   // Check if we had a complete request line
-                parsingStatus = ReqLine;
-            } // Intentionally no break here
-            case ReqLine:
-            {
-                if (buffer.Find("\r\n") != buffer.getLength())
-                {
-                    // Potential request line found, let's parse it to check if it's full
-                    if (ParsingError err = reqLine.parse(buffer); err != MoreData)
-                        return closeWithError(Code::BadRequest);
-                    // Got the request line, let's move to the headers now
-                    // A classical HTTP server will continue parsing headers here
-                    // But we aren't a classical HTTP server, there's no point in parsing header if there's no route to match for it
-                    // So we'll stop here and the server will match the routes that'll take over the parsing from here.
-                    parsingStatus = RecvHeaders;
-                    if (!reqLine.URI.normalizePath()) return closeWithError(Code::BadRequest);
-                    // Make sure we save the current normalized URI since it's used by the routes
-                    if (!reqLine.persist(sessionBuffer)) return closeWithError(Code::InternalServerError);
-
-                    // We don't need the request line anymore, let's drop it from the receive buffer
-                    memmove(recvBuffer, buffer.getData(), buffer.getLength());
-                    recvLength = buffer.getLength();
-                    return true;
-                } else {
-                    // Check if we can ultimately receive a valid request?
-                    return recvLength < ArrSz(recvBuffer) ? true : closeWithError(Code::EntityTooLarge);
-                }
-            }
-            case RecvHeaders:
-            case HeadersDone:
-            case ReqDone: break;
-            }
-            return false;
-        }
-        /** Wait for the request line to come */
-        bool waitForRequestLine() const { return true; } // TODO
-        /** Check if we already had the request line, or wait for it if not */
-        bool hadRequestLine() const { return parsingStatus >= ReqLine || waitForRequestLine(); }
-        /** Check if the client is valid */
-        bool isValid() const { return socket.isValid(); }
-
-
-    protected:
-        /** Reset this client state and buffer. This is called from the server's accept method before actually using the client */
-        void reset() {
-#ifdef ParanoidServer
-            Zero(recvBuffer);
-#endif
-            recvLength = 0;
-            sessionBuffer.reset();
-            reqLine.reset();
-            parsingStatus = Invalid;
-            socket.reset();
-            answerLength = 0;
-
-        }
-
-    };
-
 
 
     namespace Details
@@ -207,11 +71,14 @@ namespace Network::Servers::HTTP
 
         // Convert a std::array of headers to a parametric typelist
         template <Headers E> struct MakeRequest { typedef Protocol::HTTP::RequestHeader<E> Type; };
+        // Convert a std::array of headers to a parametric answer list
+        template <Headers E> struct MakeAnswer { typedef Protocol::HTTP::AnswerHeader<E> Type; };
     }
-
 
     // Useless vomit of useless garbage to get the inner content of a typelist
     template <auto headerArray, typename U> struct HeadersArray {};
+    // Useless vomit of useless garbage to get the inner content of a typelist
+    template <auto headerArray, typename U> struct AnswerHeadersArray {};
     /** The headers array with a compile time defined heterogenous tuple of headers */
     template <auto headerArray, typename ... Header>
     struct HeadersArray<headerArray, Container::TypeList<Header...>>
@@ -269,7 +136,68 @@ namespace Network::Servers::HTTP
         }
     };
 
+    struct Unobtainium {};
+    template <class... T> struct always_false : std::false_type {};
+    template <> struct always_false<Unobtainium> : std::true_type {};
 
+    template <auto headerArray, typename ... Header>
+    struct AnswerHeadersArray<headerArray, Container::TypeList<Header...>>
+    {
+        std::tuple<Header...> headers;
+
+        static constexpr std::size_t findHeaderPos(const Headers h) {
+            std::size_t pos = 0;
+            for(; pos < headerArray.size(); ++pos) if (headerArray[pos] == h) break;
+            return pos;
+        }
+        // Compile time version, faster O(1) at runtime, and smaller, obviously
+        template <Headers h>
+        AnswerHeader<h> & getHeader()
+        {
+            constexpr std::size_t pos = findHeaderPos(h);
+            if constexpr (pos == headerArray.size())
+            {   // If the compiler stops here, you're querying a header that doesn't exist...
+                throw "Invalid header given for this type, it doesn't contain any";
+//                    static RequestHeader<h> invalid;
+//                    return invalid;
+            }
+            return std::get<pos>(headers);
+        }
+
+        template <Headers h>
+        const AnswerHeader<h> & getHeader() const
+        {
+            constexpr std::size_t pos = findHeaderPos(h);
+            if constexpr (pos == headerArray.size())
+            {   // If the compiler stops here, you're querying a header that doesn't exist...
+                throw "Invalid header given for this type, it doesn't contain any";
+//                    static RequestHeader<h> invalid;
+//                    return invalid;
+            }
+            return std::get<pos>(headers);
+        }
+
+        template <Headers h>
+        bool hasValidHeader() const
+        {
+            constexpr std::size_t pos = findHeaderPos(h);
+            if constexpr (pos == headerArray.size())
+            {
+                return false;
+            } else
+            {
+                return std::get<pos>(headers).isSet();
+            }
+        }
+
+        template <std::size_t N>
+        bool sendHeaders(Container::TrackedBuffer<N> & buffer)
+        {
+            return [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
+                return (std::get<Is>(headers).write(buffer) && ...);
+            }(std::make_index_sequence<sizeof...(Header)>{});
+        }
+    };
 
     /** Convert the list of headers you're expecting to the matching HeadersArray the library is using */
     template <Headers ... allowedHeaders>
@@ -278,6 +206,260 @@ namespace Network::Servers::HTTP
         static constexpr auto headersArray = Container::getUnique<std::array<Headers, HeaderCount>{allowedHeaders...}, std::array<Headers, 1> {Headers::Authorization}>();
         typedef HeadersArray<headersArray, decltype(Container::makeTypes<Details::MakeRequest, headersArray>())> Type;
     };
+
+    template <Headers ... answerHeaders>
+    struct ToAnswerHeader {
+        static constexpr size_t HeaderCount = sizeof...(answerHeaders);
+        static constexpr auto headersArray = Container::getUnique<std::array<Headers, HeaderCount>{answerHeaders...}, std::array<Headers, 1> {Headers::WWWAuthenticate}>();
+        typedef AnswerHeadersArray<headersArray, decltype(Container::makeTypes<Details::MakeAnswer, headersArray>())> Type;
+    };
+
+
+
+
+
+    /** A client which is linked with a single session.
+        There's a fixed possible number of clients while a server is started to avoid dynamic allocation (and memory fragmentation)
+        Thus a client is identified by its index in the client array */
+    struct Client
+    {
+        /** The client socket */
+        Socket      socket;
+        /** The current parsing status for this client.
+            The state machine is like this:
+            @code
+            [ Invalid ] ==> Request line incomplete => [ ReqLine ]
+            [ ReqLine ] ==> Request line complete => [ RecvHeaders ]
+            [ RecvHeader ] ==> \r\n\r\n found ? => [ HeadersDone ] (else [NeedRefillHeaders], currently not implemented)
+            [ HeadersDone ] ==> Content received? => [ ReqDone ]
+            @endcode */
+        enum ParsingStatus
+        {
+            Invalid = 0,
+            ReqLine,
+            RecvHeaders,
+            NeedRefillHeaders, // Currently not implemented, used to trigger route's processing for emptying the recv buffer in case the request doesn't fill the available buffer
+            HeadersDone,
+            ReqDone,
+
+        } parsingStatus;
+
+        /** The buffer where all the per-request data is saved */
+        Container::FixedSize<ClientBufferSize> sessionBuffer;
+        /** The current receiving buffer */
+        char        recvBuffer[ClientBufferSize * 3];
+        std::size_t recvLength;
+        /** The current request as received and parsed by the server */
+        Protocol::HTTP::RequestLine reqLine;
+
+        /** The content length for the answer */
+        std::size_t answerLength;
+        Code        replyCode;
+
+        /** Send the client answer as expected */
+        template <typename T>
+        bool sendAnswer(T && clientAnswer, bool close = false) {
+            if (!sendStatus(clientAnswer.replyCode)) return false;
+
+            if (!clientAnswer.sendHeaders(*this)) return false;
+            auto stream = clientAnswer.getInputStream(socket);
+            std::size_t answerLength = stream.getSize();
+            if (answerLength)
+            {
+                if (!sendSize(answerLength))
+                {
+                    SLog(Level::Info, "Client %s [%.*s](%u): 523%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), answerLength, close ? " closed" : "");
+                    return false;
+                }
+
+                // Send the content now
+                while (true)
+                {
+                    std::size_t p = stream.read(recvBuffer, recvLength);
+                    if (!p) break;
+
+                    socket.send(recvBuffer, p);
+                }
+
+            } else if (reqLine.method != Method::HEAD && !clientAnswer.template hasValidHeader<Headers::TransferEncoding>())
+            {
+                // Need to send a transfer encoding header if we don't have a size for the content and it's not done by the client's answer by itself
+                socket.send(ChunkedEncoding, sizeof(ChunkedEncoding) - 1);
+                socket.send(EOM, strlen(EOM));
+
+                if (!clientAnswer.sendContent(*this, answerLength))
+                {
+                    SLog(Level::Info, "Client %s [%.*s](%u): 524%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), 0, close ? " closed" : "");
+                    return false;
+                }
+            }
+
+
+            SLog(Level::Info, "Client %s [%.*s](%u): %d%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), answerLength, (int)clientAnswer.replyCode, close ? " closed" : "");
+            parsingStatus = ReqDone;
+            return true;
+        }
+
+        bool sendStatus(Code replyCode)
+        {
+            char buffer[5] = { };
+            intToStr((int)replyCode, buffer, 10);
+            buffer[3] = ' ';
+
+            socket.send(HTTPAnswer, strlen(HTTPAnswer));
+            socket.send(buffer, strlen(buffer));
+            socket.send(Refl::toString(replyCode), strlen(Refl::toString(replyCode)));
+            socket.send(EOM, 2);
+            return true;
+        }
+        bool sendSize(std::size_t length)
+        {
+            static char hdr[] = { ':' };
+            char buffer[sizeof("18446744073709551615")] = { };
+            socket.send(Refl::toString(Headers::ContentLength), strlen(Refl::toString(Headers::ContentLength)));
+            socket.send(hdr, 1);
+            intToStr((int)length, buffer, 10);
+            socket.send(buffer, strlen(buffer));
+            socket.send(EOM, strlen(EOM));
+            return true;
+        }
+        bool reply(Code statusCode, const ROString & msg, bool close = false);
+
+        bool closeWithError(Code code) { return reply(code, "", true); }
+
+        bool parse() {
+            ROString buffer(recvBuffer, recvLength);
+            switch (parsingStatus)
+            {
+            case Invalid:
+            {   // Check if we had a complete request line
+                parsingStatus = ReqLine;
+            } // Intentionally no break here
+            case ReqLine:
+            {
+                if (buffer.Find("\r\n") != buffer.getLength())
+                {
+                    // Potential request line found, let's parse it to check if it's full
+                    if (ParsingError err = reqLine.parse(buffer); err != MoreData)
+                        return closeWithError(Code::BadRequest);
+                    // Got the request line, let's move to the headers now
+                    // A classical HTTP server will continue parsing headers here
+                    // But we aren't a classical HTTP server, there's no point in parsing header if there's no route to match for it
+                    // So we'll stop here and the server will match the routes that'll take over the parsing from here.
+                    parsingStatus = RecvHeaders;
+                    if (!reqLine.URI.normalizePath()) return closeWithError(Code::BadRequest);
+                    // Make sure we save the current normalized URI since it's used by the routes
+                    if (!reqLine.persist(sessionBuffer)) return closeWithError(Code::InternalServerError);
+
+                    // We don't need the request line anymore, let's drop it from the receive buffer
+                    memmove(recvBuffer, buffer.getData(), buffer.getLength());
+                    recvLength = buffer.getLength();
+                    buffer = ROString(recvBuffer, recvLength);
+                } else {
+                    // Check if we can ultimately receive a valid request?
+                    return recvLength < ArrSz(recvBuffer) ? true : closeWithError(Code::EntityTooLarge);
+                }
+            }
+            // Intentionally no break here
+            case RecvHeaders:
+                if (buffer.Find(EOM) != buffer.getLength())
+                {
+                    parsingStatus = HeadersDone;
+                    return true;
+                 } else {
+                    if (recvLength < ArrSz(recvBuffer)) return true;
+                    // Here, we should cut the already parsed headers where we've extracted information from.
+                    // Right now, it's not done, let's simply error out
+                    return closeWithError(Code::EntityTooLarge);
+                }
+            case HeadersDone:
+            case ReqDone: break;
+            case NeedRefillHeaders: return false; // Not implemented yet
+            }
+            return true;
+        }
+        /** Wait for the request line to come */
+        bool waitForRequestLine() const { return true; } // TODO
+        /** Check if we already had the request line, or wait for it if not */
+        bool hadRequestLine() const { return parsingStatus >= ReqLine || waitForRequestLine(); }
+        /** Check if the client is valid */
+        bool isValid() const { return socket.isValid(); }
+
+
+    protected:
+        /** Reset this client state and buffer. This is called from the server's accept method before actually using the client */
+        void reset() {
+#ifdef ParanoidServer
+            Zero(recvBuffer);
+#endif
+            recvLength = 0;
+            sessionBuffer.reset();
+            reqLine.reset();
+            parsingStatus = Invalid;
+            socket.reset();
+            answerLength = 0;
+
+        }
+
+    };
+
+
+    /** A client answer structure.
+        This is a convenient, template type, made to build an answer for an HTTP request.
+        There are 3 different possible answer type supported by this library:
+        1. A DIY answer, where you take over the client's socket, and set whatever you want (likely breaking HTTP protocol) - Not recommended
+        2. A simple answer, with basic headers (like Content-Type) and a fixed string as output.
+        3. A more complex answer with basic headers and you want to have control over the output stream (in that case, you'll give an input stream to the library to consume)
+
+        It's templated over the list of headers you intend to use in the answer (it's a statically built for saving both binary space, memory and logic).
+        In all cases, Content-Length is commputed by the library. Transfer-Encoding can be set up by you or the library depending on the stream itself
+        @param getContentFunc   A content function that returns a stream that can be used by the client to send the answer. If not provided, defaults to a simple string
+        @param answerHeaders    A list of headers you are expecting to answer */
+    template< typename Child, Headers ... answerHeaders>
+    struct ClientAnswer
+    {
+        // Construct the answer header array
+        typedef ToAnswerHeader<answerHeaders...>::Type ExpectedHeaderArray;
+        ExpectedHeaderArray headers;
+        /** The reply status code to use */
+        Code                replyCode;
+        Child * c() { return static_cast<Child*>(this); }
+
+        auto getInputStream(Socket & socket) { return c()->getInputStream(socket); }
+        void setCode(Code code) { this->replyCode = code; }
+        template <Headers h, typename Value>
+        void setHeader(Value && v) { headers.template getHeader<h>().setValue(std::forward<Value>(v)); }
+        template <Headers h>
+        bool hasValidHeader() const { return headers.template hasValidHeader<h>(); }
+
+        bool sendHeaders(Client & client)
+        {
+            Container::TrackedBuffer<sizeof(client.recvBuffer)> buffer { client.recvBuffer };
+            if (!headers.sendHeaders(buffer)) return false;
+            return client.socket.send(buffer.buffer, buffer.used) == buffer.used;
+        }
+
+        bool sendContent(Client & client, std::size_t & totalSize) { return c()->sendContent(client, totalSize); }
+    };
+
+    template <MIMEType m = MIMEType::text_plain>
+    struct SimpleAnswer : public ClientAnswer<SimpleAnswer<m>, Headers::ContentType>
+    {
+        Streams::MemoryView getInputStream(Socket&) { return Streams::MemoryView(msg); }
+        const ROString & msg;
+        SimpleAnswer(Code code, const ROString & msg) : msg(msg)
+        {
+            this->setCode(code);
+            this->template setHeader<Headers::ContentType>(m);
+        }
+    };
+
+    bool Client::reply(Code statusCode, const ROString & msg, bool close)
+    {
+        SimpleAnswer<MIMEType::text_plain> b{statusCode, msg };
+        return sendAnswer(b, close);
+    }
+
 
 
     /** The route callback template function expected signature is:
@@ -338,22 +520,14 @@ namespace Network::Servers::HTTP
             // Parse the headers as much as we can
             ROString input(client.recvBuffer, client.recvLength), header;
 
-            if (input.Find(EOM) == input.getLength())
+            if (client.parsingStatus == Client::NeedRefillHeaders)
             {
-                // No valid header here, we need to refill the client
-                // We can either put it back in the pool (and we'll be called back later when data is available)
-                // However this means that the whole request must fit in the buffer, which isn't exactly what we want
-                // Since it implies reparsing the whole buffer once more when it's ready (we can avoid this to only delay
-                // parsing when we've found the end-of-header marker ("\r\n\r\n"))
-
-                // Or we can persist what we've already parsed to the fixed buffer so it makes space for
-                // the next batch of headers in the receive buffer. This implies saving the ExpectedHeaderArray
-                // while we are returning from this function since it's a local variable
+                // Technically, we should transfer all the headers we've found to the FixedBuffer so we can make space for the next headers
                 // This implies adding serializing/deserializing code to the ExpectedHeaderArray instance to the fixed buffer.
                 // So a compilation switch since this makes a larger binary
 
-                // For now, let's implement the first option
-                return ClientState::NeedRefill;
+                // Currently not implemented.
+                return ClientState::Error;
             }
 
             do
@@ -454,7 +628,7 @@ namespace Network::Servers::HTTP
         /** Accept a client and call the appropriate route accordingly */
         static ClientState process(Client & client) {
             // TODO: Read some data from the client to fetch, at least, the request line
-            if (client.parsingStatus < Client::RecvHeaders) return ClientState::Error;
+            if (client.parsingStatus < Client::NeedRefillHeaders) return ClientState::Error;
 
             // Usual trick to test all routes in a static type list
             ClientState ret = ClientState::Error;
@@ -524,7 +698,7 @@ namespace Network::Servers::HTTP
 //                        SLog(Level::Debug, "Client %s[%.*s]", client->socket.address, client->reqLine.URI.absolutePath.getLength(), client->reqLine.URI.absolutePath.getData());
 
                         // Check if we can query the routes now
-                        if (client->parsingStatus >= Client::RecvHeaders)
+                        if (client->parsingStatus > Client::RecvHeaders)
                         {   // Yes we can, trigger the router with them
                             switch (Router.process(*client))
                             {

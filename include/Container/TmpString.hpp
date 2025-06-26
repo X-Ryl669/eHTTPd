@@ -24,6 +24,17 @@ namespace Container
         stringToPersist.swapWith(tmp);
         return true;
     }
+
+    /** A basic size limited buffer with content tracking */
+    template <std::size_t N>
+    struct TrackedBuffer
+    {
+        TrackedBuffer(char (&buffer)[N]) : buffer(buffer), used(0) {}
+        bool save(const char * data, const std::size_t length) { if (used + length > N) return false; memcpy(&buffer[used], data, length); used += length; return true; }
+        char (&buffer)[N];
+        std::size_t used;
+        static constexpr std::size_t size = N;
+    };
 }
 
 #endif
