@@ -43,7 +43,7 @@ namespace Network::Servers::HTTP
     static constexpr const char EntityTooLargeAnswer[] = "HTTP/1.1 413 Entity too large\r\n\r\n";
     static constexpr const char InternalServerErrorAnswer[] = "HTTP/1.1 500 Internal server error\r\n\r\n";
     static constexpr const char NotFoundAnswer[] = "HTTP/1.1 404 Not found\r\n\r\n";
-    static constexpr const char ChunkedEncoding[] = "Transfer-Encoding: chunked\r\n";
+    static constexpr const char ChunkedEncoding[] = "Transfer-Encoding: chunked";
 
     using namespace Protocol::HTTP;
 
@@ -160,8 +160,7 @@ namespace Network::Servers::HTTP
                 throw "Invalid header given for this type, it doesn't contain any";
 //                    static RequestHeader<h> invalid;
 //                    return invalid;
-            }
-            return std::get<pos>(headers);
+            } else return std::get<pos>(headers);
         }
 
         template <Headers h>
@@ -173,8 +172,7 @@ namespace Network::Servers::HTTP
                 throw "Invalid header given for this type, it doesn't contain any";
 //                    static RequestHeader<h> invalid;
 //                    return invalid;
-            }
-            return std::get<pos>(headers);
+            } else return std::get<pos>(headers);
         }
 
         template <Headers h>
@@ -259,44 +257,64 @@ namespace Network::Servers::HTTP
         /** Send the client answer as expected */
         template <typename T>
         bool sendAnswer(T && clientAnswer, bool close = false) {
-            if (!sendStatus(clientAnswer.replyCode)) return false;
+            if (!sendStatus(clientAnswer.getCode())) return false;
 
             if (!clientAnswer.sendHeaders(*this)) return false;
             auto stream = clientAnswer.getInputStream(socket);
-            std::size_t answerLength = stream.getSize();
-            if (answerLength)
+            std::size_t answerLength = 0;
+            if constexpr (!std::is_same_v<decltype(stream), std::nullptr_t>)
             {
-                if (!sendSize(answerLength))
+                answerLength = stream.getSize();
+                if (answerLength)
                 {
-                    SLog(Level::Info, "Client %s [%.*s](%u): 523%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), answerLength, close ? " closed" : "");
-                    return false;
-                }
+                    if (!sendSize(answerLength))
+                    {
+                        SLog(Level::Info, "Client %s [%.*s](%u): 523%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), answerLength, close ? " closed" : "");
+                        return false;
+                    }
 
-                // Send the content now
-                while (true)
+                    // Send the content now
+                    while (reqLine.method != Method::HEAD)
+                    {
+                        std::size_t p = stream.read(recvBuffer, recvLength);
+                        if (!p) break;
+
+                        socket.send(recvBuffer, p);
+                    }
+
+                } else if (stream.hasContent() && reqLine.method != Method::HEAD)
                 {
-                    std::size_t p = stream.read(recvBuffer, recvLength);
-                    if (!p) break;
+                    if (!clientAnswer.template hasValidHeader<Headers::TransferEncoding>()) {
+                        // Need to send a transfer encoding header if we don't have a size for the content and it's not done by the client's answer by itself
+                        socket.send(ChunkedEncoding, sizeof(ChunkedEncoding) - 1);
+                        socket.send(EOM, strlen(EOM));
+                    }
 
-                    socket.send(recvBuffer, p);
+                    if (!clientAnswer.sendContent(*this, answerLength))
+                    {
+                        SLog(Level::Info, "Client %s [%.*s](%u): 524%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), 0, close ? " closed" : "");
+                        return false;
+                    }
+                } else if (!stream.hasContent())
+                {
+                    if (!sendSize(0))
+                    {
+                        SLog(Level::Info, "Client %s [%.*s](%u): 525%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), answerLength, close ? " closed" : "");
+                        return false;
+                    }
                 }
-
-            } else if (reqLine.method != Method::HEAD && !clientAnswer.template hasValidHeader<Headers::TransferEncoding>())
+            } else
             {
-                // Need to send a transfer encoding header if we don't have a size for the content and it's not done by the client's answer by itself
-                socket.send(ChunkedEncoding, sizeof(ChunkedEncoding) - 1);
-                socket.send(EOM, strlen(EOM));
-
-                if (!clientAnswer.sendContent(*this, answerLength))
+                if (!sendSize(0))
                 {
-                    SLog(Level::Info, "Client %s [%.*s](%u): 524%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), 0, close ? " closed" : "");
+                    SLog(Level::Info, "Client %s [%.*s](%u): 525%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), answerLength, close ? " closed" : "");
                     return false;
                 }
             }
 
-
-            SLog(Level::Info, "Client %s [%.*s](%u): %d%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), answerLength, (int)clientAnswer.replyCode, close ? " closed" : "");
+            SLog(Level::Info, "Client %s [%.*s](%u): %d%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), answerLength, (int)clientAnswer.getCode(), close ? " closed" : "");
             parsingStatus = ReqDone;
+            if (close) reset();
             return true;
         }
 
@@ -324,8 +342,9 @@ namespace Network::Servers::HTTP
             return true;
         }
         bool reply(Code statusCode, const ROString & msg, bool close = false);
+        bool reply(Code statusCode);
 
-        bool closeWithError(Code code) { return reply(code, "", true); }
+        bool closeWithError(Code code) { return reply(code); }
 
         bool parse() {
             ROString buffer(recvBuffer, recvLength);
@@ -362,7 +381,7 @@ namespace Network::Servers::HTTP
             }
             // Intentionally no break here
             case RecvHeaders:
-                if (buffer.Find(EOM) != buffer.getLength())
+                if (buffer.Find(EOM) != buffer.getLength() || buffer == "\r\n") // No header here is valid too
                 {
                     parsingStatus = HeadersDone;
                     return true;
@@ -425,8 +444,13 @@ namespace Network::Servers::HTTP
         Code                replyCode;
         Child * c() { return static_cast<Child*>(this); }
 
-        auto getInputStream(Socket & socket) { return c()->getInputStream(socket); }
+        auto getInputStream(Socket & socket) {
+            if constexpr (requires { typename Child::getInputStream ; })
+                return c()->getInputStream(socket);
+            else return nullptr;
+        }
         void setCode(Code code) { this->replyCode = code; }
+        Code getCode() const { return this->replyCode; }
         template <Headers h, typename Value>
         void setHeader(Value && v) { headers.template getHeader<h>().setValue(std::forward<Value>(v)); }
         template <Headers h>
@@ -439,28 +463,106 @@ namespace Network::Servers::HTTP
             return client.socket.send(buffer.buffer, buffer.used) == buffer.used;
         }
 
-        bool sendContent(Client & client, std::size_t & totalSize) { return c()->sendContent(client, totalSize); }
+        bool sendContent(Client & client, std::size_t & totalSize) {
+
+            if constexpr (&Child::sendContent != &ClientAnswer::sendContent)
+                return c()->sendContent(client, totalSize);
+            else return true;
+        }
+        ClientAnswer(Code code = Code::Invalid) : replyCode(code) {}
     };
 
+
+    /** A simple answer with the given MIME type and message */
     template <MIMEType m = MIMEType::text_plain>
     struct SimpleAnswer : public ClientAnswer<SimpleAnswer<m>, Headers::ContentType>
     {
         Streams::MemoryView getInputStream(Socket&) { return Streams::MemoryView(msg); }
         const ROString & msg;
-        SimpleAnswer(Code code, const ROString & msg) : msg(msg)
+        SimpleAnswer(Code code, const ROString & msg) : SimpleAnswer::ClientAnswer(code), msg(msg)
         {
-            this->setCode(code);
             this->template setHeader<Headers::ContentType>(m);
         }
     };
+    /** The shortest answer: only a status code */
+    struct CodeAnswer : public ClientAnswer<CodeAnswer>
+    {
+        CodeAnswer(Code code) : CodeAnswer::ClientAnswer(code) {}
+    };
+
+
+
+    /** The get a chunk function that should follow this signature:
+        @code
+            ROString callback()
+        @endcode
+
+        Return an empty string to stop being called back
+        */
+    template <typename Func>
+    concept GetChunkCallback = requires (Func f) {
+        // Make sure the signature matches
+        ROString {f()};
+    };
+
+    /** Capture the client's socket when it's time for answering and call the given callback you'll fill with data */
+    template <Headers ... answerHeaders>
+    struct HeaderSet : public ClientAnswer<HeaderSet<answerHeaders...>, answerHeaders...>
+    {
+        HeaderSet(Code code) : HeaderSet::ClientAnswer(code) {}
+        HeaderSet() {}
+
+        template <typename ... Values>
+        HeaderSet(Values &&... values) {
+            // Set all the values for each header
+            [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
+                return ((this->template setHeader<answerHeaders>(values), true) && ...);
+            }(std::make_index_sequence<sizeof...(answerHeaders)>{});
+        }
+    };
+
+    /** Here we are capturing a lambda function, so we don't know the type and we don't want to perform type erasure for size reasons */
+    template <typename T, typename HS>
+    struct CaptureAnswer
+    {
+        Streams::Empty getInputStream(Socket&) { return Streams::Empty{}; }
+        /** This constructor is used for deduction guide */
+        template <typename V>
+        CaptureAnswer(Code code, T f, V && v) : headers(std::move(v)), callbackFunc(f)
+        {
+            headers.setCode(code);
+        }
+        bool sendContent(Client & client, std::size_t & totalSize) {
+            Streams::ChunkedOutput o{client.socket};
+            totalSize = 0;
+            ROString s = std::move(callbackFunc());
+            while (s)
+            {
+                if (o.write(s.getData(), s.getLength()) != s.getLength()) return false;
+                totalSize += (std::size_t)s.getLength();
+                s = std::move(callbackFunc());
+            }
+            return true;
+        }
+        template <Headers h, typename Value>
+        void setHeader(Value && v) { headers.template setHeader<h>(std::forward<Value>(v)); }
+        template <Headers h>
+        bool hasValidHeader() const { return headers.template hasValidHeader<h>(); }
+        Code getCode() const { return headers.getCode(); }
+        bool sendHeaders(Client & client) { return headers.sendHeaders(client); }
+        operator HS & () { return headers; }
+        T callbackFunc;
+        HS headers;
+    };
+    template<typename T, typename V>
+    CaptureAnswer(Code, T, V) -> CaptureAnswer<std::decay_t<T>, V>;
+
 
     bool Client::reply(Code statusCode, const ROString & msg, bool close)
     {
-        SimpleAnswer<MIMEType::text_plain> b{statusCode, msg };
-        return sendAnswer(b, close);
+        return sendAnswer(SimpleAnswer<MIMEType::text_plain>{statusCode, msg }, close);
     }
-
-
+    bool Client::reply(Code statusCode) { return sendAnswer(CodeAnswer{statusCode}, true); }
 
     /** The route callback template function expected signature is:
         @code

@@ -40,6 +40,9 @@ namespace Network
 
         bool isError() const { return (int)error > 0; }
         int getCount() const { return error <= 0 ? (int)-error : 0; }
+        bool operator ==(const std::size_t count) const { return (std::size_t)getCount() == count; }
+        bool operator ==(const int count) const { return getCount() == count; }
+        bool operator ==(const Errors e) const { return error == e; }
         operator Errors() const { return error; }
     };
 

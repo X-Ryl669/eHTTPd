@@ -176,10 +176,12 @@ namespace Protocol::HTTP
             bool write(char * buffer, std::size_t & size) const
             {
                 ROString v = Refl::toString(value);
-                WriteCheck(buffer, size, v.getLength() + 1 + attributes.getLength());
+                WriteCheck(buffer, size, v.getLength() + (attributes.getLength() ? 1 + attributes.getLength() : 0));
                 memcpy(buffer, v.getData(), v.getLength());
-                memcpy(buffer + v.getLength(), "=", 1);
-                memcpy(buffer + v.getLength() + 1, attributes.getData(), attributes.getLength());
+                if (attributes.getLength()) {
+                    memcpy(buffer + v.getLength(), "=", 1);
+                    memcpy(buffer + v.getLength() + 1, attributes.getData(), attributes.getLength());
+                }
                 return true;
             }
 
@@ -211,15 +213,19 @@ namespace Protocol::HTTP
             bool write(char * buffer, std::size_t & size) const
             {
                 if (!count) { size = 0; return true; }
-                size_t s = 0;
-                for (size_t i = 0; i < count; i++) s += Refl::toString(value[i]).getLength() + 1;
+                size_t s = 0, vs = 0;
+                for (size_t i = 0; i < count; i++)
+                {
+                    if (!value[i].write(0, vs)) return false;
+                    s += vs + 1;
+                }
 
                 WriteCheck(buffer, size, s - 1);
                 for (size_t i = 0; i < count; i++) {
-                    const ROString & h = Refl::toString(value[i]).getLength();
-                    memcpy(buffer, h.getData(), h.getLength());
-                    if (i < count - 1) memcpy(buffer + h.getLength(), ",", 1);
-                    buffer += h.getLength() + 1;
+                    vs = size;
+                    if (!value[i].write(buffer, vs)) return false;
+                    if (i < count - 1) memcpy(buffer + vs, ",", 1);
+                    buffer += vs + 1;
                 }
                 return true;
             }

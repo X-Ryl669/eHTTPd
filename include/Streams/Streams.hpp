@@ -22,6 +22,8 @@ namespace Streams
     {
         /** Get the current expected size for this stream or 0 if unknown */
         std::size_t getSize() const { return c()->getSize(); }
+        /** Check if this stream has content (likely) */
+        bool hasContent() const { return c()->_hasContent(); }
         /** Get the current position */
         std::size_t getPos() const { return c()->getPos(); }
         /** Set the current position
@@ -35,8 +37,19 @@ namespace Streams
         void unmap(void * buffer) { return c()->unmap(buffer); }
 
     private:
-        Child * c() { return static_cast<Child*>(this); }
-        const Child * c() const { return static_cast<const Child*>(this); }
+        /** Select the most derived implementation each time */
+        auto * c()
+        {
+            if constexpr (requires {typename Child::c; }) {
+                return static_cast<Child*>(this)->c();
+            } else return static_cast<Child*>(this);
+        }
+        const auto * c() const
+        {
+            if constexpr (requires {typename Child::c; }) {
+                return static_cast<const Child*>(this)->c();
+            } else return static_cast<const Child*>(this);
+        }
     };
 
     /** Input stream base interface */
@@ -50,12 +63,13 @@ namespace Streams
         std::size_t read(void * buffer, const std::size_t size) { return c()->read(buffer, size); }
 
         // Base interface
-    public:
-        std::size_t getSize() const { return c()->getSize(); }
-        std::size_t getPos() const { return c()->getPos(); }
-        bool setPos(const std::size_t pos) { return c()->setPos(pos); }
-        void * map(const std::size_t size = 0) { return c()->map(size); }
-        void unmap(void * buffer) { return c()->unmap(buffer); }
+    // public:
+    //     std::size_t getSize() const { return c()->getSize(); }
+        bool hasContent() const  { return c()->getSize() > 0 ? true : c()->_hasContent(); }
+    //     std::size_t getPos() const { return c()->getPos(); }
+    //     bool setPos(const std::size_t pos) { return c()->setPos(pos); }
+    //     void * map(const std::size_t size = 0) { return c()->map(size); }
+    //     void unmap(void * buffer) { return c()->unmap(buffer); }
     private:
         Child * c() { return static_cast<Child*>(this); }
         const Child * c() const { return static_cast<const Child*>(this); }
@@ -72,48 +86,16 @@ namespace Streams
         std::size_t write(const void * buffer, const std::size_t size) { return c()->write(buffer, size); }
 
         // Base interface
-    public:
-        std::size_t getSize() const { return c()->getSize(); }
-        std::size_t getPos() const { return c()->getPos(); }
-        bool setPos(const std::size_t pos) { return c()->setPos(pos); }
-        void * map(const std::size_t size = 0) { return c()->map(size); }
-        void unmap(void * buffer) { return c()->unmap(buffer); }
+    // public:
+    //     std::size_t getSize() const { return c()->getSize(); }
+    //     bool hasContent() const  { return c()->getSize() > 0 ? true : c()->hasContent(); }
+    //     std::size_t getPos() const { return c()->getPos(); }
+    //     bool setPos(const std::size_t pos) { return c()->setPos(pos); }
+    //     void * map(const std::size_t size = 0) { return c()->map(size); }
+    //     void unmap(void * buffer) { return c()->unmap(buffer); }
     private:
         Child * c() { return static_cast<Child*>(this); }
         const Child * c() const { return static_cast<const Child*>(this); }
-    };
-
-    /** A memory backed buffer stream. This isn't allocating any buffer */
-    struct MemoryView : public Input<MemoryView>, public Output<MemoryView>
-    {
-        std::size_t getSize() const             { return (std::size_t)buffer.getLength(); }
-        std::size_t getPos() const              { return pos; }
-        bool setPos(const std::size_t pos)      { return pos <= getSize() ? this->pos = pos, true : false; }
-
-        void * map(const std::size_t size = 0)  { return size <= buffer.getLength() ? (void*)buffer.getData() : nullptr; }
-        void unmap(void * buffer)               { }
-        std::size_t read(void * buf, const std::size_t size)
-        {
-            std::size_t q = min((getSize() - pos), size);
-            if (q) memcpy(buf, buffer.getData() + pos, q);
-            pos += q;
-            return q;
-        }
-        std::size_t write(const void * buf, const std::size_t size)
-        {
-            std::size_t q = min((getSize() - pos), size);
-            if (q) memcpy((const_cast<char*>(buffer.getData()) + pos), buf, q);
-            pos += q;
-            return q;
-        }
-
-    public:
-        MemoryView(const uint8 * buffer, std::size_t size) : buffer((const char*)buffer, (int)size), pos(0) {}
-        MemoryView(const ROString & buffer) : buffer(buffer), pos(0) {}
-
-    private:
-        ROString buffer;
-        std::size_t pos;
     };
 
     namespace Private
@@ -125,10 +107,24 @@ namespace Streams
             void unmap(void * buffer)               { }
         };
 
+        /** A no content stream */
+        struct NoContent
+        {
+            std::size_t getSize() const             { return 0; }
+            bool _hasContent() const                { return false; }
+        };
+
+        /** A with content stream */
+        struct WithContent
+        {
+            bool _hasContent() const                { return true; }
+        };
+
         /** Base class to avoid useless binary size, not instantiable */
         struct FileBase : public NonMappeable
         {
             std::size_t getSize() const             { return size; }
+            bool _hasContent() const                { return getSize() > 0; }
             std::size_t getPos() const              { return f ? (std::size_t)ftello(f) : 0; }
             bool setPos(const std::size_t pos)      { return f ? fseeko(f, pos, SEEK_SET) == 0 : false; }
 
@@ -157,6 +153,58 @@ namespace Streams
         };
     }
 
+    /** A null stream that does nothing */
+    struct Null : public Input<Null>, public Output<Null>, public Private::NonSeekable, public Private::NonMappeable, public Private::NoContent
+    {
+        std::size_t read(void * buf, const std::size_t size) { return 0; }
+        std::size_t write(const void * buf, const std::size_t size) { return 0; }
+        Null() {}
+        template <typename ... T>  Null(T&&...) {}
+    };
+
+    /** An empty stream that does nothing (but declare a content) */
+    struct Empty : public Input<Empty>, public Private::NonSeekable, public Private::NonMappeable, public Private::WithContent
+    {
+        std::size_t read(void * buf, const std::size_t size) { return 0; }
+        std::size_t write(const void * buf, const std::size_t size) { return 0; }
+        Empty() {}
+        template <typename ... T>  Empty(T&&...) {}
+    };
+
+    /** A memory backed buffer stream. This isn't allocating any buffer */
+    struct MemoryView : public Input<MemoryView>
+    {
+        std::size_t getSize() const             { return (std::size_t)buffer.getLength(); }
+        bool _hasContent() const                { return getSize() > 0; }
+        std::size_t getPos() const              { return pos; }
+        bool setPos(const std::size_t pos)      { return pos <= getSize() ? this->pos = pos, true : false; }
+
+        void * map(const std::size_t size = 0)  { return size <= buffer.getLength() ? (void*)buffer.getData() : nullptr; }
+        void unmap(void * buffer)               { }
+        std::size_t read(void * buf, const std::size_t size)
+        {
+            std::size_t q = min((getSize() - pos), size);
+            if (q) memcpy(buf, buffer.getData() + pos, q);
+            pos += q;
+            return q;
+        }
+        // std::size_t write(const void * buf, const std::size_t size)
+        // {
+        //     std::size_t q = min((getSize() - pos), size);
+        //     if (q) memcpy((const_cast<char*>(buffer.getData()) + pos), buf, q);
+        //     pos += q;
+        //     return q;
+        // }
+
+    public:
+        MemoryView(const uint8 * buffer, std::size_t size) : buffer((const char*)buffer, (int)size), pos(0) {}
+        MemoryView(const ROString & buffer) : buffer(buffer), pos(0) {}
+
+    private:
+        ROString buffer;
+        std::size_t pos;
+    };
+
     /** A file based input stream */
     struct FileInput final : public Input<FileInput>, public Private::FileBase
     {
@@ -174,7 +222,7 @@ namespace Streams
     };
 
     /** A socket stream that doesn't own the socket */
-    struct Socket final : public Input<Socket>, public Output<Socket>, public Private::NonSeekable, public Private::NonMappeable
+    struct Socket final : public Input<Socket>, public Output<Socket>, public Private::NonSeekable, public Private::NonMappeable, public Private::WithContent
     {
         std::size_t getSize() const             { return 0; }
         std::size_t read(void * buf, const std::size_t size) { return socket->recv((char*)buf, (const uint32)size).getCount(); }
@@ -185,7 +233,7 @@ namespace Streams
     };
 
     /** A chunk based output stream, following HTTP/1.1 RFC standard */
-    struct ChunkedOutput final : public Output<ChunkedOutput>, public Private::NonSeekable, public Private::NonMappeable
+    struct ChunkedOutput final : public Output<ChunkedOutput>, public Private::NonSeekable, public Private::NonMappeable, public Private::WithContent
     {
         std::size_t write(const void * buf, const std::size_t size) {
             // Write chunk header to the given socket
@@ -206,8 +254,9 @@ namespace Streams
         Socket socketStream;
     };
 
+
     /** A chunk based input stream, following HTTP/1.1 RFC standard */
-    struct ChunkedInput final : public Input<ChunkedInput>, public Private::NonSeekable, public Private::NonMappeable
+    struct ChunkedInput final : public Input<ChunkedInput>, public Private::NonSeekable, public Private::NonMappeable, public Private::WithContent
     {
         std::size_t read(void * _buf, const std::size_t size) {
             char buffer[sizeof("FFFFFFFF\r\n")] = {};
@@ -248,6 +297,26 @@ namespace Streams
     protected:
         Socket socketStream;
         std::size_t remChunkSize;
+    };
+
+    /** The get data callback function that should follow this signature:
+        @code
+            std::size_t callback(char * buffer, const std::size_t size)
+        @endcode
+        */
+    template <typename Func>
+    concept GetDataCallback = requires (Func f, char * buffer, const std::size_t size) {
+        // Make sure the signature matches
+        (std::size_t)f(buffer, size);
+    };
+
+    template<GetDataCallback auto GDCB>
+    struct CallbackInput : public Input<CallbackInput<GDCB>>, public Private::NonSeekable, public Private::NonMappeable, public Private::WithContent
+    {
+        std::size_t read(void * _buf, const std::size_t size) {
+            std::size_t s = GDCB((char*)_buf, size);
+            return s;
+        }
     };
 
 }
