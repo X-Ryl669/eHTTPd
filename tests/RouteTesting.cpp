@@ -34,8 +34,8 @@ auto LongAnswer = [](Client & client, const auto & headers)
 
     CaptureAnswer answer{
         Code::Ok,
-        [&]() { return longText.splitFrom(" "); },
-        HeaderSet<Headers::ContentType>{ MIMEType::text_plain }
+        HeaderSet<Headers::ContentType, Headers::ContentLanguage>{ {MIMEType::text_plain}, { Language::en, Language::fr } },
+        [&]() { return longText.splitFrom(" ", true); }  // Give a word by word answer, this will be called as many times as there are words in the answer
     };
 //    answer.template setHeader<Headers::ContentType>(Protocol::HTTP::MIMEType::text_plain);
     return client.sendAnswer(answer, true);

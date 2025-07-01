@@ -23,7 +23,7 @@ namespace Streams
         /** Get the current expected size for this stream or 0 if unknown */
         std::size_t getSize() const { return c()->getSize(); }
         /** Check if this stream has content (likely) */
-        bool hasContent() const { return c()->_hasContent(); }
+   //     bool hasContent() const { return c()->hasContent(); }
         /** Get the current position */
         std::size_t getPos() const { return c()->getPos(); }
         /** Set the current position
@@ -38,18 +38,8 @@ namespace Streams
 
     private:
         /** Select the most derived implementation each time */
-        auto * c()
-        {
-            if constexpr (requires {typename Child::c; }) {
-                return static_cast<Child*>(this)->c();
-            } else return static_cast<Child*>(this);
-        }
-        const auto * c() const
-        {
-            if constexpr (requires {typename Child::c; }) {
-                return static_cast<const Child*>(this)->c();
-            } else return static_cast<const Child*>(this);
-        }
+        auto * c() { return static_cast<Child*>(this)->c(); }
+        const auto * c() const { return static_cast<const Child*>(this)->c(); }
     };
 
     /** Input stream base interface */
@@ -65,7 +55,7 @@ namespace Streams
         // Base interface
     // public:
     //     std::size_t getSize() const { return c()->getSize(); }
-        bool hasContent() const  { return c()->getSize() > 0 ? true : c()->_hasContent(); }
+    //     bool hasContent() const  { return c()->getSize() > 0 ? true : c()->_hasContent(); }
     //     std::size_t getPos() const { return c()->getPos(); }
     //     bool setPos(const std::size_t pos) { return c()->setPos(pos); }
     //     void * map(const std::size_t size = 0) { return c()->map(size); }
@@ -73,6 +63,7 @@ namespace Streams
     private:
         Child * c() { return static_cast<Child*>(this); }
         const Child * c() const { return static_cast<const Child*>(this); }
+        friend struct Input::Base;
     };
 
     /** Output stream base interface */
@@ -96,6 +87,7 @@ namespace Streams
     private:
         Child * c() { return static_cast<Child*>(this); }
         const Child * c() const { return static_cast<const Child*>(this); }
+        friend struct Output::Base;
     };
 
     namespace Private
@@ -111,20 +103,20 @@ namespace Streams
         struct NoContent
         {
             std::size_t getSize() const             { return 0; }
-            bool _hasContent() const                { return false; }
+            bool hasContent() const                { return false; }
         };
 
         /** A with content stream */
         struct WithContent
         {
-            bool _hasContent() const                { return true; }
+            bool hasContent() const                { return true; }
         };
 
         /** Base class to avoid useless binary size, not instantiable */
         struct FileBase : public NonMappeable
         {
             std::size_t getSize() const             { return size; }
-            bool _hasContent() const                { return getSize() > 0; }
+            bool hasContent() const                { return getSize() > 0; }
             std::size_t getPos() const              { return f ? (std::size_t)ftello(f) : 0; }
             bool setPos(const std::size_t pos)      { return f ? fseeko(f, pos, SEEK_SET) == 0 : false; }
 
@@ -158,6 +150,7 @@ namespace Streams
     {
         std::size_t read(void * buf, const std::size_t size) { return 0; }
         std::size_t write(const void * buf, const std::size_t size) { return 0; }
+        std::size_t getSize() const { return 0; }
         Null() {}
         template <typename ... T>  Null(T&&...) {}
     };
@@ -167,6 +160,7 @@ namespace Streams
     {
         std::size_t read(void * buf, const std::size_t size) { return 0; }
         std::size_t write(const void * buf, const std::size_t size) { return 0; }
+        std::size_t getSize() const { return 0; }
         Empty() {}
         template <typename ... T>  Empty(T&&...) {}
     };
@@ -175,7 +169,7 @@ namespace Streams
     struct MemoryView : public Input<MemoryView>
     {
         std::size_t getSize() const             { return (std::size_t)buffer.getLength(); }
-        bool _hasContent() const                { return getSize() > 0; }
+        bool hasContent() const                { return getSize() > 0; }
         std::size_t getPos() const              { return pos; }
         bool setPos(const std::size_t pos)      { return pos <= getSize() ? this->pos = pos, true : false; }
 
@@ -235,6 +229,7 @@ namespace Streams
     /** A chunk based output stream, following HTTP/1.1 RFC standard */
     struct ChunkedOutput final : public Output<ChunkedOutput>, public Private::NonSeekable, public Private::NonMappeable, public Private::WithContent
     {
+        std::size_t getSize() const { return 0; }
         std::size_t write(const void * buf, const std::size_t size) {
             // Write chunk header to the given socket
             char buffer[sizeof("FFFFFFFF\r\n")] = {};
@@ -258,6 +253,7 @@ namespace Streams
     /** A chunk based input stream, following HTTP/1.1 RFC standard */
     struct ChunkedInput final : public Input<ChunkedInput>, public Private::NonSeekable, public Private::NonMappeable, public Private::WithContent
     {
+        std::size_t getSize() const { return 0; }
         std::size_t read(void * _buf, const std::size_t size) {
             char buffer[sizeof("FFFFFFFF\r\n")] = {};
             char * buf = (char*)_buf;
@@ -313,6 +309,7 @@ namespace Streams
     template<GetDataCallback auto GDCB>
     struct CallbackInput : public Input<CallbackInput<GDCB>>, public Private::NonSeekable, public Private::NonMappeable, public Private::WithContent
     {
+        std::size_t getSize() const { return 0; }
         std::size_t read(void * _buf, const std::size_t size) {
             std::size_t s = GDCB((char*)_buf, size);
             return s;

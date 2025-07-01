@@ -9,6 +9,7 @@
 #include "Methods.hpp"
 // We need TmpString too to persist string and other dynamically sized content to a client's receive buffer
 #include "../../Container/TmpString.hpp"
+#include <initializer_list>
 
 namespace Protocol::HTTP
 {
@@ -53,6 +54,8 @@ namespace Protocol::HTTP
         /** String value (opaque) */
         struct StringValue : public ValueBase, public PersistBase<StringValue>
         {
+            typedef ROString ValueType;
+
             ROString value;
             ParsingError parseFrom(ROString & val) {
                 value = val.Trim(' ');
@@ -65,6 +68,7 @@ namespace Protocol::HTTP
                 return true;
             }
             public: template <typename T> inline bool persist(T & buffer) { return Container::persistString(value, buffer); }
+            void setValue(const ROString & v) { value = v; }
         };
         template <Headers> struct ValueMap { typedef StringValue ExpectedType; };
 
@@ -82,6 +86,8 @@ namespace Protocol::HTTP
         /** Unsigned integer value (opaque) */
         struct UnsignedValue : public ValueBase
         {
+            typedef size_t ValueType;
+
             size_t value;
             virtual ParsingError parseFrom(ROString & val) {
                 value = (size_t)val.Trim(' ');
@@ -96,11 +102,14 @@ namespace Protocol::HTTP
                 memcpy(buffer, buf, s);
                 return true;
             }
+            void setValue(const size_t v) { value = v; }
         };
 
         /** Simple enum value for the given type */
         template <typename Enum, bool strict = false> struct EnumValue : public ValueBase
         {
+            typedef Enum ValueType;
+
             Enum value;
             virtual ParsingError parseFrom(ROString & val) {
                 value = Refl::fromString<Enum>(val.Trim(' ')).orElse(static_cast<Enum>(-1));
@@ -114,6 +123,7 @@ namespace Protocol::HTTP
                 memcpy(buffer, v.getData(), v.getLength());
                 return true;
             }
+            void setValue(const Enum v) { value = v; }
         };
         /** Simple enum value for the given type */
         template <typename Enum> struct StrictEnumValue : public EnumValue<Enum, true> {};
@@ -141,6 +151,7 @@ namespace Protocol::HTTP
             The quality factor is ignored and so is any token */
         template <typename Enum> struct EnumValueToken : public ValueBase
         {
+            typedef Enum ValueType;
             Enum value;
             virtual ParsingError parseFrom(ROString & val)
             {
@@ -157,10 +168,12 @@ namespace Protocol::HTTP
                 memcpy(buffer, v.getData(), v.getLength());
                 return true;
             }
+            void setValue(const Enum v) { value = v; }
         };
         /** Enum value that stores the key and value after ';' and before '=' */
         template <typename Enum> struct EnumKeyValue : public ValueBase, public PersistBase<EnumKeyValue<Enum>>
         {
+            typedef Enum ValueType;
             Enum value;
             ROString attributes;
             virtual ParsingError parseFrom(ROString & val)
@@ -193,7 +206,8 @@ namespace Protocol::HTTP
                 return v.trimmedLeft("= ").upToFirst(";").trimRight(' ');
             }
             public: template <typename T> inline bool persist(T & buffer) { return Container::persistString(attributes, buffer); }
-
+            void setValue(Enum v) { value = v; }
+            void setValue(Enum v, const ROString & attr) { value = std::forward<Enum>(v); attributes = attr; }
         };
 
         template <typename E, size_t N, bool strict = false>
@@ -229,6 +243,33 @@ namespace Protocol::HTTP
                 }
                 return true;
             }
+            void setValue(const E v, const size_t pos = 0) { if (pos < N) { value[pos] = v; if (pos > count) count = pos; } }
+
+            template <typename ... U>
+            requires ((std::is_same_v<std::decay_t<U>, typename E::ValueType> && ...))
+            void setValue(U && ... values) {
+                static_assert(sizeof...(values) <= N && "The given parameter list is larger than the array");
+                [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
+                    return ((value[Is].setValue(std::forward<U>(values)), true) && ...);
+                }(std::make_index_sequence<sizeof...(values)>{});
+                count = sizeof...(values);
+            }
+
+            template <std::size_t M>
+            requires (M <= N)
+            void setValue(E (&arr)[M]) {
+                for (std::size_t i = 0; i < M; i++) value[i] = arr[i];
+                count = M;
+            }
+
+            void setValue(std::initializer_list<typename E::ValueType> && il) {
+                auto e = il.begin();
+                for (std::size_t i = 0; i < std::min(il.size(), N); i++) {
+                    value[i].setValue(*e);
+                    ++e;
+                    count = i+1;
+                }
+            }
         };
 
 
@@ -236,6 +277,7 @@ namespace Protocol::HTTP
         template <> struct ValueMap<Headers::AcceptCharset>     { typedef ValueList<EnumValueToken<Charset>, 4> ExpectedType; };
         template <> struct ValueMap<Headers::AcceptEncoding>    { typedef ValueList<EnumValueToken<Encoding>, 4> ExpectedType; };
         template <> struct ValueMap<Headers::AcceptLanguage>    { typedef ValueList<EnumKeyValue<Language>, 8> ExpectedType; };
+        template <> struct ValueMap<Headers::ContentLanguage>   { typedef ValueList<EnumKeyValue<Language>, 8> ExpectedType; };
         template <> struct ValueMap<Headers::Authorization>     { typedef StringValue ExpectedType; };
         template <> struct ValueMap<Headers::CacheControl>      { typedef ValueList<EnumKeyValue<CacheControl>, 4> ExpectedType; };
         template <> struct ValueMap<Headers::Connection>        { typedef StrictEnumValue<Connection> ExpectedType; };

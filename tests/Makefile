@@ -1,4 +1,4 @@
-RouteTesting: RouteTesting.cpp ../include/Network/Servers/*.hpp Normalization.o ROString.o
+RouteTesting: RouteTesting.cpp ../include/Network/Servers/*.hpp Normalization.o ROString.o ../include/Streams/*.hpp
 	g++ -std=c++20 -I ../include -g -O0 $< ROString.o Normalization.o -o $@
 
 

@@ -516,7 +516,15 @@ namespace Network::Servers::HTTP
         HeaderSet(Values &&... values) {
             // Set all the values for each header
             [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
-                return ((this->template setHeader<answerHeaders>(values), true) && ...);
+                return ((this->template setHeader<answerHeaders>(std::forward<Values>(values)), true) && ...);
+            }(std::make_index_sequence<sizeof...(answerHeaders)>{});
+        }
+
+        template <typename ... Values>
+        HeaderSet(std::initializer_list<Values> && ... values) {
+            // Set all the values for each header
+            [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
+                return ((this->template setHeader<answerHeaders>(std::forward<std::initializer_list<Values>>(values)), true) && ...);
             }(std::make_index_sequence<sizeof...(answerHeaders)>{});
         }
     };
@@ -528,7 +536,7 @@ namespace Network::Servers::HTTP
         Streams::Empty getInputStream(Socket&) { return Streams::Empty{}; }
         /** This constructor is used for deduction guide */
         template <typename V>
-        CaptureAnswer(Code code, T f, V && v) : headers(std::move(v)), callbackFunc(f)
+        CaptureAnswer(Code code, V && v, T f) : headers(std::move(v)), callbackFunc(f)
         {
             headers.setCode(code);
         }
@@ -542,6 +550,8 @@ namespace Network::Servers::HTTP
                 totalSize += (std::size_t)s.getLength();
                 s = std::move(callbackFunc());
             }
+            // Need to finish sending the flux
+            o.write(nullptr, 0);
             return true;
         }
         template <Headers h, typename Value>
@@ -555,7 +565,7 @@ namespace Network::Servers::HTTP
         HS headers;
     };
     template<typename T, typename V>
-    CaptureAnswer(Code, T, V) -> CaptureAnswer<std::decay_t<T>, V>;
+    CaptureAnswer(Code, V, T) -> CaptureAnswer<std::decay_t<T>, V>;
 
 
     bool Client::reply(Code statusCode, const ROString & msg, bool close)

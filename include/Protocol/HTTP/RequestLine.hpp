@@ -3,6 +3,7 @@
 
 // We need header map, ParsingError and persistence interface
 #include "HeaderMap.hpp"
+#include <initializer_list>
 
 
 #if defined(MaxSupport)
@@ -238,6 +239,11 @@ namespace Protocol::HTTP
         }
     };
 
+
+    template <typename>                     struct IsStdInitList : std::false_type { };
+    template <typename T>                   struct IsStdInitList<std::initializer_list<T>> : std::true_type { };
+    template <typename T>                   constexpr bool is_stdinitlist_v = IsStdInitList<T>::value;
+
     template <Headers h>
     struct AnswerHeader
     {
@@ -259,7 +265,18 @@ namespace Protocol::HTTP
         }
 
         template <typename T>
-        void setValue(T && t) { v.value = std::forward<T>(t); }
+        void setValue(T && t) {
+            if constexpr(is_stdinitlist_v<std::decay_t<T>>)
+            {   // Check if the value type expect a initializer list or not
+                if constexpr( requires { v.setValue(std::forward<T>(t)); }) {
+                    v.setValue(std::forward<T>(t));
+                } else { // Else only use the first element in the array
+                    auto e = t.begin();
+                    v.setValue(*e);
+                }
+            }
+            else v.setValue(std::forward<T>(t));
+        }
 
         bool isSet() const {
             std::size_t vs = 0;
