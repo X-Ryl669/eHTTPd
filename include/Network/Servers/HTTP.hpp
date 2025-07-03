@@ -188,8 +188,7 @@ namespace Network::Servers::HTTP
             }
         }
 
-        template <std::size_t N>
-        bool sendHeaders(Container::TrackedBuffer<N> & buffer)
+        bool sendHeaders(Container::TrackedBuffer & buffer)
         {
             return [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
                 return (std::get<Is>(headers).write(buffer) && ...);
@@ -243,12 +242,9 @@ namespace Network::Servers::HTTP
         } parsingStatus;
 
         /** The buffer where all the per-request data is saved */
-        Container::FixedSize<ClientBufferSize> sessionBuffer;
-        /** The current receiving buffer */
-        char        recvBuffer[ClientBufferSize * 3];
-        std::size_t recvLength;
+        Container::TranscientVault<ClientBufferSize> recvBuffer;
         /** The current request as received and parsed by the server */
-        Protocol::HTTP::RequestLine reqLine;
+        RequestLine reqLine;
 
         /** The content length for the answer */
         std::size_t answerLength;
@@ -259,10 +255,11 @@ namespace Network::Servers::HTTP
         bool sendAnswer(T && clientAnswer, bool close = false) {
             if (!sendStatus(clientAnswer.getCode())) return false;
 
+            recvBuffer.reset();
             if (!clientAnswer.sendHeaders(*this)) return false;
-            auto stream = clientAnswer.getInputStream(socket);
+            auto && stream = clientAnswer.getInputStream(socket);
             std::size_t answerLength = 0;
-            if constexpr (!std::is_same_v<decltype(stream), std::nullptr_t>)
+            if constexpr (!std::is_same_v<std::decay_t<decltype(stream)>, std::nullptr_t>)
             {
                 answerLength = stream.getSize();
                 if (answerLength)
@@ -276,10 +273,10 @@ namespace Network::Servers::HTTP
                     // Send the content now
                     while (reqLine.method != Method::HEAD)
                     {
-                        std::size_t p = stream.read(recvBuffer, recvLength);
+                        std::size_t p = stream.read(recvBuffer.getHead(), recvBuffer.freeSize());
                         if (!p) break;
 
-                        socket.send(recvBuffer, p);
+                        socket.send((const char*)recvBuffer.getHead(), p);
                     }
 
                 } else if (stream.hasContent() && reqLine.method != Method::HEAD)
@@ -347,7 +344,7 @@ namespace Network::Servers::HTTP
         bool closeWithError(Code code) { return reply(code); }
 
         bool parse() {
-            ROString buffer(recvBuffer, recvLength);
+            ROString buffer = recvBuffer.getView<ROString>();
             switch (parsingStatus)
             {
             case Invalid:
@@ -368,15 +365,14 @@ namespace Network::Servers::HTTP
                     parsingStatus = RecvHeaders;
                     if (!reqLine.URI.normalizePath()) return closeWithError(Code::BadRequest);
                     // Make sure we save the current normalized URI since it's used by the routes
-                    if (!reqLine.persist(sessionBuffer)) return closeWithError(Code::InternalServerError);
+                    if (!reqLine.persist(recvBuffer)) return closeWithError(Code::InternalServerError);
 
                     // We don't need the request line anymore, let's drop it from the receive buffer
-                    memmove(recvBuffer, buffer.getData(), buffer.getLength());
-                    recvLength = buffer.getLength();
-                    buffer = ROString(recvBuffer, recvLength);
+                    recvBuffer.drop(buffer.getData());
+                    buffer = recvBuffer.getView<ROString>();
                 } else {
                     // Check if we can ultimately receive a valid request?
-                    return recvLength < ArrSz(recvBuffer) ? true : closeWithError(Code::EntityTooLarge);
+                    return recvBuffer.freeSize() ? true : closeWithError(Code::EntityTooLarge);
                 }
             }
             // Intentionally no break here
@@ -386,7 +382,7 @@ namespace Network::Servers::HTTP
                     parsingStatus = HeadersDone;
                     return true;
                  } else {
-                    if (recvLength < ArrSz(recvBuffer)) return true;
+                    if (recvBuffer.freeSize()) return true;
                     // Here, we should cut the already parsed headers where we've extracted information from.
                     // Right now, it's not done, let's simply error out
                     return closeWithError(Code::EntityTooLarge);
@@ -397,10 +393,8 @@ namespace Network::Servers::HTTP
             }
             return true;
         }
-        /** Wait for the request line to come */
-        bool waitForRequestLine() const { return true; } // TODO
-        /** Check if we already had the request line, or wait for it if not */
-        bool hadRequestLine() const { return parsingStatus >= ReqLine || waitForRequestLine(); }
+        /** Get the requested, normalized URI, helper function */
+        ROString getRequestedPath() const { return reqLine.URI.onlyPath(); }
         /** Check if the client is valid */
         bool isValid() const { return socket.isValid(); }
 
@@ -408,11 +402,7 @@ namespace Network::Servers::HTTP
     protected:
         /** Reset this client state and buffer. This is called from the server's accept method before actually using the client */
         void reset() {
-#ifdef ParanoidServer
-            Zero(recvBuffer);
-#endif
-            recvLength = 0;
-            sessionBuffer.reset();
+            recvBuffer.reset();
             reqLine.reset();
             parsingStatus = Invalid;
             socket.reset();
@@ -458,7 +448,7 @@ namespace Network::Servers::HTTP
 
         bool sendHeaders(Client & client)
         {
-            Container::TrackedBuffer<sizeof(client.recvBuffer)> buffer { client.recvBuffer };
+            Container::TrackedBuffer buffer { client.recvBuffer.getHead(), client.recvBuffer.freeSize() };
             if (!headers.sendHeaders(buffer)) return false;
             return client.socket.send(buffer.buffer, buffer.used) == buffer.used;
         }
@@ -529,7 +519,8 @@ namespace Network::Servers::HTTP
         }
     };
 
-    /** Here we are capturing a lambda function, so we don't know the type and we don't want to perform type erasure for size reasons */
+    /** Here we are capturing a lambda function, so we don't know the type and we don't want to perform type erasure for size reasons
+        This structure will use chunked transfer to send pieces of the answer */
     template <typename T, typename HS>
     struct CaptureAnswer
     {
@@ -540,6 +531,8 @@ namespace Network::Servers::HTTP
         {
             headers.setCode(code);
         }
+
+        // Proxy the ClientAnswer interface here, using headers' member
         bool sendContent(Client & client, std::size_t & totalSize) {
             Streams::ChunkedOutput o{client.socket};
             totalSize = 0;
@@ -561,12 +554,56 @@ namespace Network::Servers::HTTP
         Code getCode() const { return headers.getCode(); }
         bool sendHeaders(Client & client) { return headers.sendHeaders(client); }
         operator HS & () { return headers; }
+
+        /** The lambda function we've captured */
         T callbackFunc;
+        /** Aggregate header type */
         HS headers;
     };
+    /** Add a deducing guide for the lambda function */
     template<typename T, typename V>
     CaptureAnswer(Code, V, T) -> CaptureAnswer<std::decay_t<T>, V>;
 
+    /** A answer solution that's returning the content of the given file */
+    template <typename InputStream, Headers ... answerHeaders>
+    struct FileAnswer : public ClientAnswer<FileAnswer<InputStream, answerHeaders...>, Headers::ContentType, answerHeaders...>
+    {
+        /** Get the expected MIME type from the given file extension */
+        constexpr static MIMEType getMIMEFromExtension(const ROString ext) {
+            using namespace CompileTime;
+            MIMEType mimeType = MIMEType::application_octetStream;
+            switch(constHash(ext.getData(), ext.getLength()))
+            {
+            case "html"_hash: case "htm"_hash: mimeType = MIMEType::text_html; break;
+            case "css"_hash:                   mimeType = MIMEType::text_css; break;
+            case "js"_hash:                    mimeType = MIMEType::application_javascript; break;
+            case "png"_hash:                   mimeType = MIMEType::image_png; break;
+            case "jpg"_hash: case "jpeg"_hash: mimeType = MIMEType::image_jpeg; break;
+            case "gif"_hash:                   mimeType = MIMEType::image_gif; break;
+            case "svg"_hash:                   mimeType = MIMEType::image_svg__xml; break;
+            case "webp"_hash:                  mimeType = MIMEType::image_webp; break;
+            case "xml"_hash:                   mimeType = MIMEType::application_xml; break;
+            case "txt"_hash:                   mimeType = MIMEType::text_plain; break;
+            default: break;
+            }
+            return mimeType;
+        }
+
+        InputStream & getInputStream(Socket &) { return stream; }
+
+        FileAnswer(const char* path) : FileAnswer::ClientAnswer(Code::NotFound), stream(path)
+        {
+            // Check if the file is found
+            if (stream.hasContent())
+            {
+                this->setCode(Code::Ok);
+                // Then find out the extension for the file in order to deduce the MIME type to use
+                this->template setHeader<Headers::ContentType>(getMIMEFromExtension(ROString(path).fromLast(".")));
+            } else this->template setHeader<Headers::ContentType>(MIMEType::Invalid);
+        }
+
+        InputStream stream;
+    };
 
     bool Client::reply(Code statusCode, const ROString & msg, bool close)
     {
@@ -630,7 +667,7 @@ namespace Network::Servers::HTTP
         static ClientState parse(Client & client, Func && f)
         {
             // Parse the headers as much as we can
-            ROString input(client.recvBuffer, client.recvLength), header;
+            ROString input = client.recvBuffer.getView<ROString>(), header;
 
             if (client.parsingStatus == Client::NeedRefillHeaders)
             {
@@ -732,6 +769,9 @@ namespace Network::Servers::HTTP
         }
     };
 
+    /** The default route */
+    template <RouteCallback auto CallbackCRTP, MethodsMask methods, Headers ... allowedHeaders> using DefaultRoute = Route<CallbackCRTP, methods, "", allowedHeaders...>;
+
     /** Allow to compute the merge of all static routes in a single object */
     template <auto ... Routes>
     struct Router
@@ -795,14 +835,14 @@ namespace Network::Servers::HTTP
                     // Got a client for a socket, so need to fill the client buffer and let it progress parsing
                     Client * client = container_of(socket, Client, socket);
                     // Check if we can fill the receive buffer first
-                    uint32 availableLength = ArrSz(client->recvBuffer) - client->recvLength;
-                    Error ret = client->socket.recv(&client->recvBuffer[client->recvLength], min(availableLength, 16u), availableLength);
+                    uint32 availableLength = client->recvBuffer.freeSize();
+                    Error ret = client->socket.recv((char*)client->recvBuffer.getHead(), 0, availableLength);
                     if (ret.isError())
                     {
                         closeClient(client, Code::BadRequest);
                         continue;
                     }
-                    client->recvLength += ret.getCount();
+                    client->recvBuffer.stored(ret.getCount());
 
                     // Then parse the client code here at best as we can
                     if (!client->parse()) closeClient(client);

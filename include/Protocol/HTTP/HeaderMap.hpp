@@ -26,7 +26,7 @@ namespace Protocol::HTTP
     struct PersistBase : public PersistantTag
     {
         template <std::size_t N>
-        inline bool persist(Container::FixedSize<N> & buffer) { return static_cast<Client*>(this)->persist(buffer); }
+        inline bool persist(Container::TranscientVault<N> & buffer) { return static_cast<Client*>(this)->persist(buffer); }
     };
 
 

@@ -16,9 +16,9 @@ namespace Container
         while it's receiving a request (and flushing its network's buffers).
         The client owns the ring buffer and release all of the temporary allocations at once in a single move */
     template <std::size_t N>
-    static bool persistString(ROString & stringToPersist, Container::FixedSize<N> & buffer)
+    static bool persistString(ROString & stringToPersist, Container::TranscientVault<N> & buffer)
     {
-        const char * t = buffer.saveString(stringToPersist.getData(), stringToPersist.getLength());
+        const char * t = buffer.saveStringInVault(stringToPersist.getData(), stringToPersist.getLength());
         if (!t) return false;
         ROString tmp(t, stringToPersist.getLength());
         stringToPersist.swapWith(tmp);
@@ -26,14 +26,13 @@ namespace Container
     }
 
     /** A basic size limited buffer with content tracking */
-    template <std::size_t N>
     struct TrackedBuffer
     {
-        TrackedBuffer(char (&buffer)[N]) : buffer(buffer), used(0) {}
+        TrackedBuffer(uint8 * buffer, std::size_t N) : buffer((char*)buffer), used(0), N(N) {}
         bool save(const char * data, const std::size_t length) { if (used + length > N) return false; memcpy(&buffer[used], data, length); used += length; return true; }
-        char (&buffer)[N];
-        std::size_t used;
-        static constexpr std::size_t size = N;
+        bool canFit(const std::size_t len) { return used + len <= N; }
+        char * buffer;
+        std::size_t used, N;
     };
 }
 

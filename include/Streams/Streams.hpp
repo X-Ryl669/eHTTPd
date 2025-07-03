@@ -116,12 +116,12 @@ namespace Streams
         struct FileBase : public NonMappeable
         {
             std::size_t getSize() const             { return size; }
-            bool hasContent() const                { return getSize() > 0; }
+            bool hasContent() const                 { return f ? true : false; }
             std::size_t getPos() const              { return f ? (std::size_t)ftello(f) : 0; }
             bool setPos(const std::size_t pos)      { return f ? fseeko(f, pos, SEEK_SET) == 0 : false; }
 
         public:
-            FileBase(const char * path, bool write) : f(fopen(path, write ? "wb" : "rb"))
+            FileBase(const char * path, bool write) : f(fopen(path, write ? "wb" : "rb")), size(0)
             {
                 if (f) {
                     fseeko(f, 0, SEEK_END);
@@ -129,9 +129,11 @@ namespace Streams
                     fseeko(f, 0, SEEK_SET);
                 }
             }
+            FileBase(FileBase && move) : f(move.f), size(move.size) { move.close(false); }
             // virtual ~FileBase() { if (f) fclose(f); } // Would be convenient, but this imply a virtual table cost we don't want to pay
 
         protected:
+            void close(bool close = true) { if (close && f) fclose(f); f = nullptr; size = 0; }
             // Prevent instantiating this class directly, except for derived class
             ~FileBase() {}
             FILE * f;
@@ -202,17 +204,25 @@ namespace Streams
     /** A file based input stream */
     struct FileInput final : public Input<FileInput>, public Private::FileBase
     {
+        using Private::FileBase::getSize;
         std::size_t read(void * buf, const std::size_t size) { return f ? fread(buf, 1, size, f) : 0; }
         FileInput(const char * path) : FileBase(path, false) {}
-        ~FileInput() { if (f) fclose(f); }
+        ~FileInput() { close(); }
+
+        FileInput(const FileInput &) = delete;
+        FileInput(FileInput && input) : FileBase(std::move(input)) {}
     };
 
     /** A file based output stream */
     struct FileOutput final : public Output<FileOutput>, public Private::FileBase
     {
+        using Private::FileBase::getSize;
         std::size_t write(const void * buf, const std::size_t size) { return f ? fwrite(buf, 1, size, f) : 0; }
         FileOutput(const char * path) : FileBase(path, true) {}
-        ~FileOutput() { if (f) fclose(f); }
+        ~FileOutput() { close(); }
+
+        FileOutput(const FileOutput &) = delete;
+        FileOutput(FileOutput && output) : FileBase(std::move(output)) {}
     };
 
     /** A socket stream that doesn't own the socket */

@@ -94,10 +94,12 @@ namespace Network {
 
         Virtual Error recv(char * buffer, const uint32 minLength, const uint32 maxLength = 0)
         {
-            int ret = ::recv(socket, buffer, minLength, MSG_WAITALL);
-            if (ret <= 0) return ret;
-            if (maxLength <= minLength) return ret;
-
+            int ret = 0;
+            if (minLength) {
+                ret = ::recv(socket, buffer, minLength, MSG_WAITALL);
+                if (ret <= 0) return ret;
+                if (maxLength <= minLength) return ret;
+            }
             int nret = ::recv(socket, &buffer[ret], maxLength - ret, 0);
             return nret <= 0 ? nret : nret + ret;
         }

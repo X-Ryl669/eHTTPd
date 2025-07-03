@@ -3,7 +3,8 @@
 
 // We need header map, ParsingError and persistence interface
 #include "HeaderMap.hpp"
-#include <initializer_list>
+// We need concepts too
+#include "../../Concepts.hpp"
 
 
 #if defined(MaxSupport)
@@ -97,6 +98,8 @@ namespace Protocol::HTTP
         explicit operator bool() const { return absolutePath; }
         /** Get the first query part in the request URI (if any) */
         Query getQueryPart() const { return Query{absolutePath.fromFirst("?")}; }
+        /** Get only the path, not the query part */
+        ROString onlyPath() const { return absolutePath.upToFirst("?"); }
 
         RequestURI & operator = (const ROString & path) { absolutePath = path; return *this; }
 #if defined(MaxSupport)
@@ -240,9 +243,6 @@ namespace Protocol::HTTP
     };
 
 
-    template <typename>                     struct IsStdInitList : std::false_type { };
-    template <typename T>                   struct IsStdInitList<std::initializer_list<T>> : std::true_type { };
-    template <typename T>                   constexpr bool is_stdinitlist_v = IsStdInitList<T>::value;
 
     template <Headers h>
     struct AnswerHeader
@@ -266,8 +266,8 @@ namespace Protocol::HTTP
 
         template <typename T>
         void setValue(T && t) {
-            if constexpr(is_stdinitlist_v<std::decay_t<T>>)
-            {   // Check if the value type expect a initializer list or not
+            if constexpr(Concepts::is_stdinitlist_v<std::decay_t<T>>)
+            {   // Check if the value type accepts an initializer list or not
                 if constexpr( requires { v.setValue(std::forward<T>(t)); }) {
                     v.setValue(std::forward<T>(t));
                 } else { // Else only use the first element in the array
@@ -285,14 +285,13 @@ namespace Protocol::HTTP
             return true;
         }
 
-        template <std::size_t N>
-        bool write(Container::TrackedBuffer<N> & buffer)
+        bool write(Container::TrackedBuffer & buffer)
         {
             std::size_t vs = 0;
             if (!v.write(0, vs)) return false;
             if (vs == 0) return true; // Skip headers without any value, since it's wrong anyway
             const ROString & s = Refl::toString(header);
-            if (buffer.used + vs + 3 + s.getLength() > N) return false;
+            if (!buffer.canFit(vs + 3 + s.getLength())) return false;
 
             if (!buffer.save(s.getData(), s.getLength())) return false;
             if (!buffer.save(":", 1)) return false;

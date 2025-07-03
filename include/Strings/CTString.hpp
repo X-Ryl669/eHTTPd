@@ -83,6 +83,20 @@ namespace CompileTime
         return i;
     }
 
+
+    unsigned constexpr constHash(char const * input)
+    {
+        return *input ? static_cast<unsigned int>(*input) + 257 * constHash( input + 1 ) : 5381;
+    }
+    unsigned constexpr constHash(char const * input, std::size_t len)
+    {
+        return len ? static_cast<unsigned int>(*input) + 257 * constHash( input + 1, len - 1 ) : 5381;
+    }
+
+    size_t constexpr operator "" _hash( const char* str, size_t len )
+    {
+        return constHash( str );
+    }
 }
 
 #endif

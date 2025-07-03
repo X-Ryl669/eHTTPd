@@ -34,10 +34,30 @@ auto LongAnswer = [](Client & client, const auto & headers)
 
     CaptureAnswer answer{
         Code::Ok,
-        HeaderSet<Headers::ContentType, Headers::ContentLanguage>{ {MIMEType::text_plain}, { Language::en, Language::fr } },
+        // Using initializer list here for each given type if any of them requires multiple value, else you can use the value directly
+        HeaderSet<Headers::ContentType, Headers::ContentLanguage>{ { MIMEType::text_plain }, { Language::en, Language::fr } },
         [&]() { return longText.splitFrom(" ", true); }  // Give a word by word answer, this will be called as many times as there are words in the answer
     };
+    // Another possibility to set the header
 //    answer.template setHeader<Headers::ContentType>(Protocol::HTTP::MIMEType::text_plain);
+    return client.sendAnswer(answer, true);
+};
+
+auto CatchAll = [](Client & client, const auto & headers)
+{
+    // Simple catch all callback, used for serving files
+    // First, check the requested URI
+    ROString path = client.getRequestedPath();
+    // Need to make an absolute (local) path from this relative path
+    // This is for demonstration only, the final path should be sanitized, and this is specific to POSIX platform
+    char buffer[256];
+    getcwd(buffer, sizeof(buffer));
+    size_t cwdLen = strlen(buffer);
+    if (cwdLen + path.getLength() + 1 >= sizeof(buffer)) return false;
+    memcpy(buffer + cwdLen, path.getData(), path.getLength());
+    buffer[cwdLen + path.getLength()] = 0;
+
+    FileAnswer<Streams::FileInput> answer(buffer);
     return client.sendAnswer(answer, true);
 };
 
@@ -48,7 +68,8 @@ int main()
 {
     constexpr Router<
         Route<Color, MethodsMask{ Method::GET, Method::POST }, "/Color", Headers::ContentLength, Headers::Date, Headers::ContentDisposition>{},
-        Route<LongAnswer, Method::GET, "/long", Headers::Date >{}
+        Route<LongAnswer, Method::GET, "/long", Headers::Date >{},
+        DefaultRoute<CatchAll, Method::GET, Headers::Date >{}
     > router;
 
     Server<router, 4> server;
