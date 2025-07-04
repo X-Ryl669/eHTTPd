@@ -273,10 +273,10 @@ namespace Network::Servers::HTTP
                     // Send the content now
                     while (reqLine.method != Method::HEAD)
                     {
-                        std::size_t p = stream.read(recvBuffer.getHead(), recvBuffer.freeSize());
+                        std::size_t p = stream.read(recvBuffer.getTail(), recvBuffer.freeSize());
                         if (!p) break;
 
-                        socket.send((const char*)recvBuffer.getHead(), p);
+                        socket.send((const char*)recvBuffer.getTail(), p);
                     }
 
                 } else if (stream.hasContent() && reqLine.method != Method::HEAD)
@@ -343,6 +343,41 @@ namespace Network::Servers::HTTP
 
         bool closeWithError(Code code) { return reply(code); }
 
+
+        uint32 persistVaultSize = 0;
+
+        template <typename Headers>
+        Client & routeFound(Headers & headers)
+        {
+            if (parsingStatus == NeedRefillHeaders)
+            {   // Need to reload all headers from the vault here (if any saved)
+                if (recvBuffer.vaultSize() >= persistVaultSize)
+                {   // Reload the header from the vault here
+                    ROString vault = recvBuffer.getVaultView<ROString>();
+                    memcpy(&headers, vault.getData(), sizeof(headers));
+                    // Discard the headers from the vault so we can have space for any new string to persist
+                    recvBuffer.resetVault(persistVaultSize);
+                }
+            }
+            return *this;
+        }
+
+        template <typename Headers>
+        ClientState saveHeaders(Headers & headers)
+        {
+            if (parsingStatus == NeedRefillHeaders)
+            {
+                // Save the actual used size for persisted strings (that won't be reset on the next parsing)
+                persistVaultSize = recvBuffer.vaultSize();
+                // Save the current header array to the vault as-is. It's a poor man serialization, but it should work
+                if (!recvBuffer.saveInVault((const uint8*)&headers, sizeof(headers))) {
+                    closeWithError(Code::InternalServerError);
+                    return ClientState::Error;
+                }
+            }
+            return ClientState::NeedRefill;
+        }
+
         bool parse() {
             ROString buffer = recvBuffer.getView<ROString>();
             switch (parsingStatus)
@@ -365,10 +400,10 @@ namespace Network::Servers::HTTP
                     parsingStatus = RecvHeaders;
                     if (!reqLine.URI.normalizePath()) return closeWithError(Code::BadRequest);
                     // Make sure we save the current normalized URI since it's used by the routes
-                    if (!reqLine.persist(recvBuffer)) return closeWithError(Code::InternalServerError);
+                    if (!reqLine.persist(recvBuffer, (std::size_t)((const uint8*)buffer.getData() - recvBuffer.getHead()))) return closeWithError(Code::InternalServerError);
 
                     // We don't need the request line anymore, let's drop it from the receive buffer
-                    recvBuffer.drop(buffer.getData());
+                    persistVaultSize = recvBuffer.vaultSize();
                     buffer = recvBuffer.getView<ROString>();
                 } else {
                     // Check if we can ultimately receive a valid request?
@@ -377,19 +412,25 @@ namespace Network::Servers::HTTP
             }
             // Intentionally no break here
             case RecvHeaders:
+            case NeedRefillHeaders:
                 if (buffer.Find(EOM) != buffer.getLength() || buffer == "\r\n") // No header here is valid too
                 {
                     parsingStatus = HeadersDone;
                     return true;
                  } else {
                     if (recvBuffer.freeSize()) return true;
-                    // Here, we should cut the already parsed headers where we've extracted information from.
-                    // Right now, it's not done, let's simply error out
-                    return closeWithError(Code::EntityTooLarge);
+
+                    // Here, we cut the already parsed headers where we've extracted information from.
+                    if (recvBuffer.getSize() < 64)
+                    {   // There is not enough space left for the transcient buffer (the vault is already too large) to actually make any process, so let's just reject this as an error
+                        return closeWithError(Code::EntityTooLarge);
+                    }
+                    // Just remember to refill headers in the route when we know more about it
+                    parsingStatus = NeedRefillHeaders;
+                    return true;
                 }
             case HeadersDone:
             case ReqDone: break;
-            case NeedRefillHeaders: return false; // Not implemented yet
             }
             return true;
         }
@@ -448,7 +489,7 @@ namespace Network::Servers::HTTP
 
         bool sendHeaders(Client & client)
         {
-            Container::TrackedBuffer buffer { client.recvBuffer.getHead(), client.recvBuffer.freeSize() };
+            Container::TrackedBuffer buffer { client.recvBuffer.getTail(), client.recvBuffer.freeSize() };
             if (!headers.sendHeaders(buffer)) return false;
             return client.socket.send(buffer.buffer, buffer.used) == buffer.used;
         }
@@ -610,294 +651,6 @@ namespace Network::Servers::HTTP
         return sendAnswer(SimpleAnswer<MIMEType::text_plain>{statusCode, msg }, close);
     }
     bool Client::reply(Code statusCode) { return sendAnswer(CodeAnswer{statusCode}, true); }
-
-    /** The route callback template function expected signature is:
-        @code
-            bool ARouteCallback(Client &, const HeaderArray<...> & )
-        @endcode
-        Since the 2nd argument is hard to compute, it's better to either use a template lamda like this:
-        @code
-            auto ARouteCallback = [](Client & x, const auto& arg) {}
-        @endcode
-        If it's not possible, you'll have to get the type with ToHeaderArray, but it means you'll have to repeat yourself in the route declaration (like this):
-        @code
-            bool ARouteCallback(Client & client, const ToHeaderArray<Headers::ContentType, Headers::Date>:Type &)
-        @endcode
-        */
-    template <typename Func>
-    concept RouteCallback = requires (Func f, Client c) {
-        // Make sure the signature matches
-        f(c, HeadersArray<std::array<Headers, 1>{Headers::ContentType}, Container::TypeList<RequestHeader<Headers::ContentType>>>{}); // Who said we can't feed brainfuck to C++ compiler?
-    };
-
-    /** The log callback function that expected from the server. The signature is:
-        @code
-            void ALogFunction(Network::Level, static const char * message with printf like formatting, arguments...)
-        @endcode
-        By default a null-log function is used */
-    template<typename Func>
-    concept LogCallback = requires (Func f, Level l, const char * msg) {
-        f(l, msg);
-        f(l, msg, 1);
-    };
-
-#ifndef SLog
-    // If no log function defined, let's define a no-op stub here
-    template <typename ... Args>
-    constexpr void noLog(Network::Level, const char*, Args && ...) {}
-    #define SLog noLog
-#endif
-
-    /** This is use to share the common code for all template specialization to avoid code bloat */
-    struct RouteHelper
-    {
-        /** Simple accepter that's checking both the method and the given route */
-        static bool accept(Client & client, uint32 methodsMask, const char * route, const std::size_t routeLength)
-        {
-            if (((1<<(uint32)client.reqLine.method) & methodsMask)
-                && client.reqLine.URI.absolutePath.midString(0, routeLength) == route) // TODO: Use match here instead of plain old string comparison to allow wildcards
-                return true;
-            return false;
-        }
-        /** An wildcard accepter that's only check the method, not the route */
-        static bool accept(Client & client, uint32 methodsMask) { return ((1<<(uint32)client.reqLine.method) & methodsMask); }
-
-        /** A generic header parser that's using the given lambda function for the specialized stuff (this limits the binary size) */
-        template <typename Func>
-        static ClientState parse(Client & client, Func && f)
-        {
-            // Parse the headers as much as we can
-            ROString input = client.recvBuffer.getView<ROString>(), header;
-
-            if (client.parsingStatus == Client::NeedRefillHeaders)
-            {
-                // Technically, we should transfer all the headers we've found to the FixedBuffer so we can make space for the next headers
-                // This implies adding serializing/deserializing code to the ExpectedHeaderArray instance to the fixed buffer.
-                // So a compilation switch since this makes a larger binary
-
-                // Currently not implemented.
-                return ClientState::Error;
-            }
-
-            do
-            {
-                if (ParsingError err = GenericHeaderParser::parseHeader(input, header); err != MoreData)
-                    break;
-
-                RequestHeaderBase * reqHdr = 0;
-                Headers h = f(header, reqHdr);
-                if (h == Headers::Invalid)
-                {   // We don't care about this header, let's skip it
-                    if (GenericHeaderParser::skipValue(input) != MoreData)
-                        break;
-                }
-                else
-                {   // Ok, we are intested by this header, let's parse it
-                    if (!reqHdr)
-                    {
-                        client.closeWithError(Code::InternalServerError);
-                        return ClientState::Error;
-                    }
-
-                    if (ParsingError err = reqHdr->acceptValue(input); err != MoreData && err != EndOfRequest)
-                    {   // Parsing error
-                        client.closeWithError(Code::NotAcceptable);
-                        return ClientState::Error;
-                    }
-                }
-                // Done, parsing? let's call the callback
-                if (input == "\r\n") return ClientState::Processing;
-
-            } while(true);
-
-            client.closeWithError(Code::BadRequest);
-            return ClientState::Error;
-        }
-    };
-
-    /** A HTTP route that's accepted by this server. You'll define a list of routes with those in Router object declaration */
-    template <RouteCallback auto CallbackCRTP,  MethodsMask methods, CompileTime::str route, Headers ... allowedHeaders>
-    struct Route final : public RouteHelper
-    {
-        typedef ToHeaderArray<allowedHeaders...>::Type ExpectedHeaderArray;
-        /** Early and fast check to see if the current request by the client is worth continuing parsing the headers */
-        static bool accept(Client & client) { return RouteHelper::accept(client, methods.mask, route.data, route.size); }
-
-        /** Once a route is accepted for a client, let's compute the list of headers and parse them all */
-        static ClientState parse(Client & client)
-        {
-            ExpectedHeaderArray headers;
-            auto cb = [&](const ROString & header, RequestHeaderBase *& reqHdr) {
-                Headers h = headers.acceptHeader(header);
-                if (h != Headers::Invalid) reqHdr = headers.getHeader(h);
-                return h;
-            };
-
-            ClientState state = RouteHelper::parse(client, cb);
-            if (state == ClientState::Processing)
-            {   // Ok, the header were accepted, let's start processing this route
-                return CallbackCRTP(client, headers) ? ClientState::Done : ClientState::Error;
-            }
-            return state;
-        }
-    };
-
-    // Generic catch all route used for file serving typically
-    template <RouteCallback auto CallbackCRTP, MethodsMask methods, Headers ... allowedHeaders>
-    struct Route<CallbackCRTP, methods, "", allowedHeaders...> final : public RouteHelper
-    {
-        typedef ToHeaderArray<allowedHeaders...>::Type ExpectedHeaderArray;
-        /** Early and fast check to see if the current request by the client is worth continuing parsing the headers */
-        static bool accept(Client & client) { return RouteHelper::accept(client, methods.mask); }
-
-        /** Once a route is accepted for a client, let's compute the list of headers and parse them all */
-        static ClientState parse(Client & client)
-        {
-            ExpectedHeaderArray headers;
-            auto cb = [&](const ROString & header, RequestHeaderBase *& reqHdr) {
-                Headers h = headers.acceptHeader(header);
-                if (h != Headers::Invalid) reqHdr = headers.getHeader(h);
-                return h;
-            };
-
-            ClientState state = RouteHelper::parse(client, cb);
-            if (state == ClientState::Processing)
-            {   // Ok, the header were accepted, let's start processing this route
-                return CallbackCRTP(client, headers) ? ClientState::Done : ClientState::Error;
-            }
-            return state;
-        }
-    };
-
-    /** The default route */
-    template <RouteCallback auto CallbackCRTP, MethodsMask methods, Headers ... allowedHeaders> using DefaultRoute = Route<CallbackCRTP, methods, "", allowedHeaders...>;
-
-    /** Allow to compute the merge of all static routes in a single object */
-    template <auto ... Routes>
-    struct Router
-    {
-        static constexpr auto routes = std::make_tuple(Routes...);
-        /** Accept a client and call the appropriate route accordingly */
-        static ClientState process(Client & client) {
-            // TODO: Read some data from the client to fetch, at least, the request line
-            if (client.parsingStatus < Client::NeedRefillHeaders) return ClientState::Error;
-
-            // Usual trick to test all routes in a static type list
-            ClientState ret = ClientState::Error;
-            bool handled = [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
-                return ( (std::get<Is>(routes).accept(client) ? (ret = std::get<Is>(routes).parse(client), true) : false) || ... );
-            }(std::make_index_sequence<sizeof...(Routes)>{});
-
-            if (!handled) { client.closeWithError(Code::NotFound); return ClientState::Error; }
-            return ret;
-        }
-    };
-
-
-        /** The server itself.
-        The server roles is to maintain a list of client's resources and perform the network activity work
-        That is:
-        1. Monitoring for network activity
-        2. Fetching data and accepting connections
-        3. Sending data back to clients
-        4. Managing session/cookies between clients */
-    template <auto Router/*, LogCallback auto logCB = noLog*/, std::size_t MaxClientCount = 4>
-    struct Server
-    {
-        /** The main client array that's allocated upon construction and never desallocated */
-        Client clientsArray[MaxClientCount] = {};
-        /** The server's own socket */
-        Socket server;
-        /** The socket pool for passively monitoring sockets */
-        SocketPool<MaxClientCount + 1> pool;
-        /** The cookie jar for each session */
-        //TODO
-
-        Error closeClient(Client * client, Code errorCode = Code::Invalid)
-        {
-            // The client is in error, let's remove it from the pool anyway
-            pool.remove(client->socket);
-            // Default answer for invalid client
-            if (errorCode != Code::Invalid) client->closeWithError(errorCode);
-            return Success;
-        }
-
-        /** The main server loop */
-        Error loop(uint32 timeoutMs = 20)
-        {
-            if (pool.selectActive(timeoutMs) == Success)
-            {   // At least, one socket made progress, so deal with it
-
-                // Deal with client socket first
-                Socket * socket;
-                while ((socket = pool.getReadableSocket(1))) // Start from 1 since socket 0 if for the server
-                {
-                    // Got a client for a socket, so need to fill the client buffer and let it progress parsing
-                    Client * client = container_of(socket, Client, socket);
-                    // Check if we can fill the receive buffer first
-                    uint32 availableLength = client->recvBuffer.freeSize();
-                    Error ret = client->socket.recv((char*)client->recvBuffer.getHead(), 0, availableLength);
-                    if (ret.isError())
-                    {
-                        closeClient(client, Code::BadRequest);
-                        continue;
-                    }
-                    client->recvBuffer.stored(ret.getCount());
-
-                    // Then parse the client code here at best as we can
-                    if (!client->parse()) closeClient(client);
-                    else {
-//                        SLog(Level::Debug, "Client %s[%.*s]", client->socket.address, client->reqLine.URI.absolutePath.getLength(), client->reqLine.URI.absolutePath.getData());
-
-                        // Check if we can query the routes now
-                        if (client->parsingStatus > Client::RecvHeaders)
-                        {   // Yes we can, trigger the router with them
-                            switch (Router.process(*client))
-                            {
-                            case ClientState::Error: closeClient(client); break;
-                            case ClientState::Done:  closeClient(client); break;
-                            // Don't remove the client from the pool in that case, let's simply continue later on
-                            case ClientState::Processing: break;
-                            case ClientState::NeedRefill: break;
-                            }
-                        }
-                    }
-                }
-
-                if (pool.isReadable(0))
-                {   // The server socket is active, let's check if we have any client to process
-                    // Find the position for a free client in the array
-                    for (auto i = 0; i < ArrSz(clientsArray); i++)
-                        if (!clientsArray[i].isValid())
-                        {
-                            Error ret = server.accept(clientsArray[i].socket, 0);
-                            if (ret.isError()) return ret;
-
-                            // Client was received, so let's add this to the loop
-                            if (!pool.append(clientsArray[i].socket)) return AllocationFailure;
-                            break;
-                        }
-
-                    // None found, it'll be processed on the next loop anyway
-                    return Success;
-                }
-            }
-
-            return Success;
-        }
-
-        Server() {}
-
-        Error create(uint16 port)
-        {
-            if (Error ret = server.listen(port, MaxClientCount); ret.isError())
-                return ret;
-
-            if (!pool.append(server)) return AllocationFailure;
-            SLog(Level::Info, "HTTP server listening on port %u", port);
-            return Success;
-        }
-    };
 }
 
 

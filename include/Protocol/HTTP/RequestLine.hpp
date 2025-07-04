@@ -24,7 +24,7 @@ namespace Protocol::HTTP
     {
         ROString query;
 
-    public: template <typename T> inline bool persist(T & buffer) { return Container::persistString(query, buffer); }
+    public: template <typename T> inline bool persist(T & buffer, std::size_t futureDrop = 0) { return Container::persistString(query, buffer, futureDrop); }
         // Interface
     public:
         /** Get the value for the given key
@@ -88,7 +88,7 @@ namespace Protocol::HTTP
         /** The absolute path given to the URI */
         ROString absolutePath;
 
-    public: template <typename T> inline bool persist(T & buffer) { return Container::persistString(absolutePath, buffer); }
+    public: template <typename T> inline bool persist(T & buffer, std::size_t futureDrop = 0) { return Container::persistString(absolutePath, buffer, futureDrop); }
 
         // Interface
     public:
@@ -118,7 +118,7 @@ namespace Protocol::HTTP
         /** The protocol version */
         Version     version = Version::Invalid;
 
-    public: template <typename T> inline bool persist(T & buffer) { return URI.persist(buffer); }
+    public: template <typename T> inline bool persist(T & buffer, std::size_t futureDrop = 0) { return URI.persist(buffer, futureDrop); }
         // Interface
     public:
         /** Parse the given data stream */
@@ -198,7 +198,7 @@ namespace Protocol::HTTP
             @return InvalidHeader upon unknown or invalid header */
         Headers getHeaderType() const { return Refl::fromString<Headers>(header).orElse(Headers::Invalid); }
 
-    public: template <typename T> inline bool persist(T & buffer) { return Container::persistString(header, buffer) && Container::persistString(value, buffer);  }
+    public: template <typename T> inline bool persist(T & buffer, std::size_t futureDrop = 0) { return Container::persistString(header, buffer, futureDrop) && Container::persistString(value, buffer, futureDrop);  }
     };
 
     struct RequestHeaderBase
@@ -217,6 +217,7 @@ namespace Protocol::HTTP
         ParsingError acceptValue(ROString & input) { return acceptValue(input, rawValue); }
         virtual bool acceptHeader(ROString & header) const { return true; }
         virtual ParsingError acceptValue(ROString & input, ROString & value) { return GenericHeaderParser::parseValue(input, value); }
+        virtual HeaderMap::ValueBase * getValue(){ return nullptr; }
     };
 
     struct InvalidRequestHeaderBase : public RequestHeaderBase
@@ -240,6 +241,13 @@ namespace Protocol::HTTP
             val = val.trimRight(' ');
             return parsed.parseFrom(tmp);
         }
+        HeaderMap::ValueBase * getValue() {
+            if constexpr(std::is_base_of<PersistantTag, std::decay_t<decltype(parsed)>>::value) {
+                return &parsed;
+            }
+            return nullptr;
+        }
+
     };
 
 

@@ -15,6 +15,7 @@ static void logger(auto level, const char * msg, ...)
     printf("\n");
 }
 #include "Network/Servers/HTTP.hpp"
+#include "Network/Servers/Route.hpp"
 
 #include "Container/CTVector.hpp"
 

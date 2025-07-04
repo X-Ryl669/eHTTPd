@@ -20,13 +20,15 @@ namespace Protocol::HTTP
         MoreData = 1,
     };
 
+    using Container::MaxPersistStringArray;
+
     /** This interface is implemented in structure that take a reference on a temporary buffer and that need to save it to a persistant buffer */
     struct PersistantTag{};
     template <typename Client>
     struct PersistBase : public PersistantTag
     {
         template <std::size_t N>
-        inline bool persist(Container::TranscientVault<N> & buffer) { return static_cast<Client*>(this)->persist(buffer); }
+        inline bool persist(Container::TranscientVault<N> & buffer, std::size_t futureDrop = 0) { return static_cast<Client*>(this)->persist(buffer, futureDrop); }
     };
 
 
@@ -49,6 +51,7 @@ namespace Protocol::HTTP
             virtual ParsingError parseFrom(ROString & value) = 0;
             virtual bool write(char * buffer, std::size_t & size) const = 0;
             template <Headers h, typename T> T * as() { if constexpr(std::is_same_v<typename ValueMap<h>::ExpectedType, T>) { return static_cast<typename ValueMap<h>::ExpectedType*>(this); } else return (void*)0; }
+            virtual void getStringToPersist(MaxPersistStringArray & arr) {  }
         };
 
         /** String value (opaque) */
@@ -67,7 +70,9 @@ namespace Protocol::HTTP
                 memcpy(buffer, value.getData(), value.getLength());
                 return true;
             }
-            public: template <typename T> inline bool persist(T & buffer) { return Container::persistString(value, buffer); }
+            public: template <typename T> inline bool persist(T & buffer, std::size_t futureDrop = 0) { return Container::persistString(value, buffer, futureDrop); }
+
+            void getStringToPersist(MaxPersistStringArray & arr) { arr[0] = &value; }
             void setValue(const ROString & v) { value = v; }
         };
         template <Headers> struct ValueMap { typedef StringValue ExpectedType; };
@@ -205,7 +210,9 @@ namespace Protocol::HTTP
                 if (v[0] != '=') return ROString();
                 return v.trimmedLeft("= ").upToFirst(";").trimRight(' ');
             }
-            public: template <typename T> inline bool persist(T & buffer) { return Container::persistString(attributes, buffer); }
+            public: template <typename T> inline bool persist(T & buffer, std::size_t futureDrop = 0) { return Container::persistString(attributes, buffer, futureDrop); }
+            void getStringToPersist(MaxPersistStringArray & arr) { arr[0] = &attributes; }
+
             void setValue(Enum v) { value = v; }
             void setValue(Enum v, const ROString & attr) { value = std::forward<Enum>(v); attributes = attr; }
         };
@@ -243,6 +250,20 @@ namespace Protocol::HTTP
                 }
                 return true;
             }
+            public: template <typename T> inline bool persist(T & buffer, std::size_t futureDrop = 0) {
+                for (size_t i = 0; i < count; i++)
+                    if (!value[i].persist(buffer, futureDrop)) return false;
+                return true;
+            }
+
+            void getStringToPersist(MaxPersistStringArray & arr) {
+                static_assert(arr.max_size() >= N && "Please increase the MaxPersistStringArray size if you've increased the ValueList size");
+                for (size_t i = 1; i < count; i++) {
+                    value[i].getStringToPersist(arr); arr[i] = arr[0];
+                }
+                value[0].getStringToPersist(arr);
+            }
+
             void setValue(const E v, const size_t pos = 0) { if (pos < N) { value[pos] = v; if (pos > count) count = pos; } }
 
             template <typename ... U>

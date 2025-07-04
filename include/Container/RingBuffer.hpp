@@ -314,18 +314,18 @@ namespace Container
 
     /** A Power-Of-2 stack buffer with 2 write heads.
         This container is a bit strange, because it's dealing with area.
-        The "temporary" area start from the beginning of the buffer to the second head (initially set to the end of the buffer).
+        The "transcient" area start from the beginning of the buffer to the second head (initially set to the end of the buffer).
         Whenever some data need to be persisted, the second head is moved down toward the beggining of the buffer and the
         data to keep is copied in the "vault" space created.
-        The "temporary" area is thus shrinked by the space consumed by the used "vault" space.
+        The "transcient" area is thus shrinked by the space consumed by the used "vault" space.
 
         Examples:
         @code
         [                                                      ]
         ^                                                      ^
-        |__ w                                              v __|      w is the write head for the temporary, v for the vault
+        |__ w                                              v __|      w is the write head for the transcient, v for the vault
 
-        Write some bytes in temporary buffer:
+        Write some bytes in transcient buffer:
         [GET / HTTP/1.1\r\n                                    ]
                            ^                                   ^
                            |__ w                           v __|
@@ -336,7 +336,7 @@ namespace Container
                            |__ w                          v __|
 
 
-        Reset temporary buffer for next part of the message (and receive new part):
+        Reset transcient buffer for next part of the message (and receive new part):
         [Host: example.com\r\n                                /]
                               ^                               ^
                               |__ w                       v __|
@@ -346,7 +346,7 @@ namespace Container
                               ^                    ^
                               |__ w            v __|
 
-        Reset temporary buffer for next part of the message (and receive new part):
+        Reset transcient buffer for next part of the message (and receive new part):
         [Connection: close\r\n                     example.com/]
                               ^                    ^
                               |__ w            v __|
@@ -354,7 +354,7 @@ namespace Container
         @endcode
 
         This kind of buffer is perfectly suited for parsing code that's reducing the amount of data while parsed.
-        The parsed data is likely to consume less space than the textual version in the "temporary" area, thus the same buffer
+        The parsed data is likely to consume less space than the textual version in the "transcient" area, thus the same buffer
         can be gradually reused to parse a huge input message down to a small abstract tree.
 
         Unlike the ring buffer, this doesn't wrap around if full.
@@ -363,24 +363,31 @@ namespace Container
     struct TranscientVault
     {
         static constexpr std::size_t BufferSize = sizePowerOf2;
-        /** Write pointer in the buffer (for the temporary buffer) */
+        /** Write pointer in the buffer (for the transcient buffer) */
         uint32                          w;
         /** Vault pointer in the buffer */
         uint32                          v;
         /** The buffer to write packets into */
         uint8                           buffer[sizePowerOf2];
 
-        /** Get the consumed size in the temporary buffer */
+        /** Get the consumed size in the transcient buffer */
         inline uint32 getSize() const { return w; }
+        /** Get the size of the vault */
+        inline uint32 vaultSize() const { return sizePowerOf2 - v; }
         /** Get the available size in the buffer */
         inline uint32 freeSize() const { return v - w; }
-        /** Stored the given amount in the temporary buffer (to be used with getHead later on)
+        /** Stored the given amount in the transcient buffer (to be used with getTail later on)
             @warning Using the buffer directly is dangerous, make sure you're not overwriting the vault here */
         inline void stored(const uint32 s) { w += s; }
-        /** Get the current head in the temporary buffer
+        /** Get the current head in the transcient buffer
             @warning Using the buffer directly is dangerous, make sure you're not overwriting the vault here */
-        inline uint8 * getHead() { return &buffer[w]; }
-        /** Get the temporary buffer as a view */
+        inline uint8 * getTail() { return &buffer[w]; }
+        /** Get the head of the transcient buffer */
+        inline uint8 * getHead() { return buffer; }
+        /** Get the head of the transcient buffer */
+        inline uint8 * getVaultHead() { return &buffer[v]; }
+
+        /** Get the transcient buffer as a view */
         template <typename T> inline T getView() {
             if constexpr(requires {T(buffer, w); }) {
                 return T(buffer, w);
@@ -389,17 +396,19 @@ namespace Container
         /** Get the vault buffer as a view */
         template <typename T> inline T getVaultView() {
             if constexpr(requires {T(buffer, w); }) {
-                return T(&buffer[v], sizePowerOf2 - v);
+                return T(getVaultHead(), vaultSize());
             } else {
-                return T((const char*)&buffer[v], std::size_t(sizePowerOf2 - v));
+                return T((const char*)getVaultHead(), std::size_t(vaultSize()));
             }
         }
-        /** Reset the write head for the temporary buffer */
-        inline void resetTemporary(const uint32 writePos = 0) { if (writePos >= v) return; w = writePos; }
-        /** Drop count bytes from the beginning of the temporary buffer */
+        /** Reset the write head for the transcient buffer */
+        inline void resetTranscient(const uint32 size = 0) { if (size >= v) return; w = size; }
+        /** Reset the write head for the transcient buffer */
+        inline void resetVault(const uint32 size = 0) { if (size >= vaultSize()) return; v = sizePowerOf2 - size; }
+        /** Drop count bytes from the beginning of the transcient buffer */
         inline void drop(const uint32 size)
         {
-            if (size >= w) resetTemporary();
+            if (size >= w) resetTranscient();
             else
             {
                 memmove(buffer, &buffer[size], w - size);
@@ -430,7 +439,6 @@ namespace Container
         const char * saveString(const char * str, std::size_t len = 0)
         {
             if (!len) len = strlen(str);
-            uint8 c = 0;
             if (save((const uint8*)str, len))
                 return (const char*)&buffer[w - len];
             return 0;
@@ -457,11 +465,27 @@ namespace Container
         const char * saveStringInVault(const char * str, std::size_t len = 0)
         {
             if (!len) len = strlen(str);
-            uint8 c = 0;
             if (saveInVault((const uint8*)str, len))
-                return (const char*)&buffer[v];
+                return (const char*)getVaultHead();
             return 0;
         }
+        /** Save a string in the vault by dropping the given amount from the transcient buffer.
+            Because the string is likely coming from the transcient buffer, it's copied to a stack allocated buffer first,
+            then dropped from the transcient buffer to make space for it in the vault. This invalidate all pointers held to the transcient buffer */
+        const char * transferStringToVault(const char * str, std::size_t len = 0, std::size_t futureDrop = 0)
+        {
+            if (!len) len = strlen(str);
+            // Save the string to the stack before being erased
+            char * tmp = (char*)alloca(len);
+            memcpy(tmp, str, len);
+
+            if (futureDrop >= w) w = 0;
+            else drop(futureDrop);
+            if (saveInVault((const uint8*)tmp, len))
+                return (const char*)getVaultHead();
+            return 0;
+        }
+
 
         /** Build the ring buffer */
         TranscientVault() : w(0), v(sizePowerOf2)
