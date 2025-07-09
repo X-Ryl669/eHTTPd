@@ -145,7 +145,6 @@ namespace Protocol::HTTP
         void reset() { method = Method::Invalid; URI = ROString(); version = Version::Invalid; }
     };
 
-
     struct GenericHeaderParser
     {
         /** Parse the given data stream until the header is found (stop at value) */
@@ -217,7 +216,7 @@ namespace Protocol::HTTP
         ParsingError acceptValue(ROString & input) { return acceptValue(input, rawValue); }
         virtual bool acceptHeader(ROString & header) const { return true; }
         virtual ParsingError acceptValue(ROString & input, ROString & value) { return GenericHeaderParser::parseValue(input, value); }
-        virtual HeaderMap::ValueBase * getValue(){ return nullptr; }
+        virtual HeaderMap::ValueBase * getPersistValue(){ return nullptr; }
     };
 
     struct InvalidRequestHeaderBase : public RequestHeaderBase
@@ -229,7 +228,8 @@ namespace Protocol::HTTP
     template <Headers h>
     struct RequestHeader : public RequestHeaderBase
     {
-        typename HeaderMap::ValueMap<h>::ExpectedType parsed;
+        typedef typename HeaderMap::ValueMap<h>::ExpectedType ValueType;
+        ValueType parsed;
         static constexpr Headers header = h;
 
         /** Check to see if this header is the expected type and in that case, capture the value */
@@ -241,13 +241,28 @@ namespace Protocol::HTTP
             val = val.trimRight(' ');
             return parsed.parseFrom(tmp);
         }
-        HeaderMap::ValueBase * getValue() {
+        HeaderMap::ValueBase * getPersistValue() {
             if constexpr(std::is_base_of<PersistantTag, std::decay_t<decltype(parsed)>>::value) {
                 return &parsed;
             }
             return nullptr;
         }
 
+        /** Get the number of element that were parsed (usually 1) */
+        std::size_t getValueElementsCount() {
+            if constexpr(requires{ parsed.count; }) {
+                return parsed.count;
+            } else { return 1; }
+        }
+        /** Get the i-th element that was parsed */
+        auto getValueElement(std::size_t i) {
+            if constexpr(requires{ parsed.count; }) {
+                if (i >= parsed.count)
+                    // All enumeration used for headers are made to accept -1 as error
+                    return decltype(parsed.value[0].value)(-1);
+                return parsed.value[i].value;
+            } else return parsed.value;
+        }
     };
 
 

@@ -22,8 +22,20 @@ namespace Network::Servers::HTTP
         */
     template <typename Func>
     concept RouteCallback = requires (Func f, Client c) {
-        // Make sure the signature matches
-        f(c, HeadersArray<std::array<Headers, 1>{Headers::ContentType}, Container::TypeList<RequestHeader<Headers::ContentType>>>{}); // Who said we can't feed brainfuck to C++ compiler?
+        // Make sure the signature matches (try with the largest possible header array here)
+        f(c, HeadersArray<std::array{
+#ifdef MaxSupport
+                Headers::Accept, Headers::AcceptCharset, Headers::AcceptDatetime, Headers::AcceptEncoding, Headers::AcceptLanguage, Headers::AcceptPatch, Headers::AcceptRanges, Headers::AccessControlAllowCredentials, Headers::AccessControlAllowHeaders, Headers::AccessControlAllowMethods, Headers::AccessControlAllowOrigin, Headers::AccessControlExposeHeaders, Headers::AccessControlMaxAge, Headers::AccessControlRequestMethod, Headers::Allow, Headers::Authorization, Headers::CacheControl, Headers::Connection, Headers::ContentDisposition, Headers::ContentEncoding, Headers::ContentLanguage, Headers::ContentLength, Headers::ContentLocation, Headers::ContentRange, Headers::ContentType, Headers::Cookie, Headers::Date, Headers::ETag, Headers::Expect, Headers::Expires, Headers::Forwarded, Headers::From, Headers::Host, Headers::IfMatch, Headers::IfModifiedSince, Headers::IfNoneMatch, Headers::IfRange, Headers::IfUnmodifiedSince, Headers::LastModified, Headers::Link, Headers::Location, Headers::MaxForwards, Headers::Origin, Headers::Pragma, Headers::Prefer, Headers::ProxyAuthorization, Headers::Range, Headers::Referer, Headers::Server, Headers::SetCookie, Headers::StrictTransportSecurity, Headers::TE, Headers::Trailer, Headers::TransferEncoding, Headers::Upgrade, Headers::UserAgent, Headers::Via, Headers::WWWAuthenticate, Headers::XForwardedFor
+#else
+                Headers::Accept, Headers::AcceptEncoding, Headers::AcceptLanguage, Headers::AcceptRanges, Headers::AccessControlAllowOrigin, Headers::Authorization, Headers::CacheControl, Headers::Connection, Headers::ContentDisposition, Headers::ContentEncoding, Headers::ContentLanguage, Headers::ContentLength, Headers::ContentRange, Headers::ContentType, Headers::Cookie, Headers::Date, Headers::Expires, Headers::Host, Headers::LastModified, Headers::Location, Headers::Origin, Headers::Pragma, Headers::Range, Headers::Referer, Headers::Server, Headers::SetCookie, Headers::TE, Headers::TransferEncoding, Headers::Upgrade, Headers::UserAgent, Headers::WWWAuthenticate
+#endif
+            }, Container::TypeList<
+#ifdef MaxSupport
+                RequestHeader<Headers::Accept>, RequestHeader<Headers::AcceptCharset>, RequestHeader<Headers::AcceptDatetime>, RequestHeader<Headers::AcceptEncoding>, RequestHeader<Headers::AcceptLanguage>, RequestHeader<Headers::AcceptPatch>, RequestHeader<Headers::AcceptRanges>, RequestHeader<Headers::AccessControlAllowCredentials>, RequestHeader<Headers::AccessControlAllowHeaders>, RequestHeader<Headers::AccessControlAllowMethods>, RequestHeader<Headers::AccessControlAllowOrigin>, RequestHeader<Headers::AccessControlExposeHeaders>, RequestHeader<Headers::AccessControlMaxAge>, RequestHeader<Headers::AccessControlRequestMethod>, RequestHeader<Headers::Allow>, RequestHeader<Headers::Authorization>, RequestHeader<Headers::CacheControl>, RequestHeader<Headers::Connection>, RequestHeader<Headers::ContentDisposition>, RequestHeader<Headers::ContentEncoding>, RequestHeader<Headers::ContentLanguage>, RequestHeader<Headers::ContentLength>, RequestHeader<Headers::ContentLocation>, RequestHeader<Headers::ContentRange>, RequestHeader<Headers::ContentType>, RequestHeader<Headers::Cookie>, RequestHeader<Headers::Date>, RequestHeader<Headers::ETag>, RequestHeader<Headers::Expect>, RequestHeader<Headers::Expires>, RequestHeader<Headers::Forwarded>, RequestHeader<Headers::From>, RequestHeader<Headers::Host>, RequestHeader<Headers::IfMatch>, RequestHeader<Headers::IfModifiedSince>, RequestHeader<Headers::IfNoneMatch>, RequestHeader<Headers::IfRange>, RequestHeader<Headers::IfUnmodifiedSince>, RequestHeader<Headers::LastModified>, RequestHeader<Headers::Link>, RequestHeader<Headers::Location>, RequestHeader<Headers::MaxForwards>, RequestHeader<Headers::Origin>, RequestHeader<Headers::Pragma>, RequestHeader<Headers::Prefer>, RequestHeader<Headers::ProxyAuthorization>, RequestHeader<Headers::Range>, RequestHeader<Headers::Referer>, RequestHeader<Headers::Server>, RequestHeader<Headers::SetCookie>, RequestHeader<Headers::StrictTransportSecurity>, RequestHeader<Headers::TE>, RequestHeader<Headers::Trailer>, RequestHeader<Headers::TransferEncoding>, RequestHeader<Headers::Upgrade>, RequestHeader<Headers::UserAgent>, RequestHeader<Headers::Via>, RequestHeader<Headers::WWWAuthenticate>, RequestHeader<Headers::XForwardedFor>
+#else
+                RequestHeader<Headers::Accept>, RequestHeader<Headers::AcceptEncoding>, RequestHeader<Headers::AcceptLanguage>, RequestHeader<Headers::AcceptRanges>, RequestHeader<Headers::AccessControlAllowOrigin>, RequestHeader<Headers::Authorization>, RequestHeader<Headers::CacheControl>, RequestHeader<Headers::Connection>, RequestHeader<Headers::ContentDisposition>, RequestHeader<Headers::ContentEncoding>, RequestHeader<Headers::ContentLanguage>, RequestHeader<Headers::ContentLength>, RequestHeader<Headers::ContentRange>, RequestHeader<Headers::ContentType>, RequestHeader<Headers::Cookie>, RequestHeader<Headers::Date>, RequestHeader<Headers::Expires>, RequestHeader<Headers::Host>, RequestHeader<Headers::LastModified>, RequestHeader<Headers::Location>, RequestHeader<Headers::Origin>, RequestHeader<Headers::Pragma>, RequestHeader<Headers::Range>, RequestHeader<Headers::Referer>, RequestHeader<Headers::Server>, RequestHeader<Headers::SetCookie>, RequestHeader<Headers::TE>, RequestHeader<Headers::TransferEncoding>, RequestHeader<Headers::Upgrade>, RequestHeader<Headers::UserAgent>, RequestHeader<Headers::WWWAuthenticate>
+#endif
+        >>{}); // Who said we can't feed brainfuck to C++ compiler?
     };
 
     /** The log callback function that expected from the server. The signature is:
@@ -92,7 +104,11 @@ namespace Network::Servers::HTTP
                     }
                 }
                 // Done, parsing? let's call the callback
-                if (input == "\r\n") return ClientState::Processing;
+                if (input.midString(0, 2) == "\r\n")
+                {   // Skip to content directly for further processing if required
+                    client.recvBuffer.drop((std::size_t)((const uint8*)input.getData() - client.recvBuffer.getHead()) + 2);
+                    return ClientState::Processing;
+                }
 
             } while(true);
 
@@ -144,10 +160,10 @@ namespace Network::Servers::HTTP
                     }
 
                     // Check if we need to persist the header to the vault here
-                    HeaderMap::ValueBase * persist = reqHdr->getValue();
+                    HeaderMap::ValueBase * persist = reqHdr->getPersistValue();
                     if (persist)
                     {
-                        MaxPersistStringArray arr;
+                        MaxPersistStringArray arr = {};
                         persist->getStringToPersist(arr);
                         if (!Container::persistStrings(arr, client.recvBuffer, (std::size_t)((const uint8*)input.getData() - client.recvBuffer.getHead())))
                         {
@@ -158,7 +174,11 @@ namespace Network::Servers::HTTP
                     }
                 }
                 // Done, parsing? let's call the callback
-                if (input == "\r\n") return ClientState::Processing;
+                if (input.midString(0, 2) == "\r\n")
+                {   // Skip to content directly for further processing if required
+                    client.recvBuffer.drop((std::size_t)((const uint8*)input.getData() - client.recvBuffer.getHead()) + 2);
+                    return ClientState::Processing;
+                }
 
             } while(true);
 
@@ -167,62 +187,50 @@ namespace Network::Servers::HTTP
         }
     };
 
+    template <RouteCallback auto CallbackCRTP, typename H>
+    static ClientState routeParse(Client & client)
+    {
+        H headers;
+        auto cb = [&](const ROString & header, RequestHeaderBase *& reqHdr) {
+            Headers h = headers.acceptHeader(header);
+            if (h != Headers::Invalid) reqHdr = headers.getHeader(h);
+            return h;
+        };
+
+        ClientState state = client.parsingStatus == Client::HeadersDone && !client.hasPersistedHeaders() ? RouteHelper::parse(client, cb) : RouteHelper::parsePersist(client.routeFound(headers), cb);
+        if (state == ClientState::NeedRefill)
+        {
+            return client.saveHeaders(headers);
+        }
+        if (state == ClientState::Processing)
+        {   // Ok, the header were accepted, let's start processing this route
+            return CallbackCRTP(client, headers) ? ClientState::Done : ClientState::Error;
+        }
+        return state;
+    }
+
     /** A HTTP route that's accepted by this server. You'll define a list of routes with those in Router object declaration */
     template <RouteCallback auto CallbackCRTP,  MethodsMask methods, CompileTime::str route, Headers ... allowedHeaders>
     struct Route final : public RouteHelper
     {
-        typedef ToHeaderArray<allowedHeaders...>::Type ExpectedHeaderArray;
+        typedef MakeHeadersArray<methods, allowedHeaders...>::Type ExpectedHeaderArray;
         /** Early and fast check to see if the current request by the client is worth continuing parsing the headers */
         static bool accept(Client & client) { return RouteHelper::accept(client, methods.mask, route.data, route.size); }
 
         /** Once a route is accepted for a client, let's compute the list of headers and parse them all */
-        static ClientState parse(Client & client)
-        {
-            ExpectedHeaderArray headers;
-            auto cb = [&](const ROString & header, RequestHeaderBase *& reqHdr) {
-                Headers h = headers.acceptHeader(header);
-                if (h != Headers::Invalid) reqHdr = headers.getHeader(h);
-                return h;
-            };
-
-            ClientState state = client.parsingStatus == Client::HeadersDone ? RouteHelper::parse(client, cb) : RouteHelper::parsePersist(client.routeFound(headers), cb);
-            if (state == ClientState::NeedRefill)
-            {
-                return client.saveHeaders(headers);
-            }
-            if (state == ClientState::Processing)
-            {   // Ok, the header were accepted, let's start processing this route
-                return CallbackCRTP(client, headers) ? ClientState::Done : ClientState::Error;
-            }
-            return state;
-        }
+        static ClientState parse(Client & client) { return routeParse<CallbackCRTP, ExpectedHeaderArray>(client); }
     };
 
     // Generic catch all route used for file serving typically
     template <RouteCallback auto CallbackCRTP, MethodsMask methods, Headers ... allowedHeaders>
     struct Route<CallbackCRTP, methods, "", allowedHeaders...> final : public RouteHelper
     {
-        typedef ToHeaderArray<allowedHeaders...>::Type ExpectedHeaderArray;
+        typedef MakeHeadersArray<methods, allowedHeaders...>::Type ExpectedHeaderArray;
         /** Early and fast check to see if the current request by the client is worth continuing parsing the headers */
         static bool accept(Client & client) { return RouteHelper::accept(client, methods.mask); }
 
         /** Once a route is accepted for a client, let's compute the list of headers and parse them all */
-        static ClientState parse(Client & client)
-        {
-            ExpectedHeaderArray headers;
-            auto cb = [&](const ROString & header, RequestHeaderBase *& reqHdr) {
-                Headers h = headers.acceptHeader(header);
-                if (h != Headers::Invalid) reqHdr = headers.getHeader(h);
-                return h;
-            };
-
-            ClientState state = RouteHelper::parse(client, cb);
-            if (state == ClientState::Processing)
-            {   // Ok, the header were accepted, let's start processing this route
-                return CallbackCRTP(client, headers) ? ClientState::Done : ClientState::Error;
-            }
-            return state;
-        }
+        static ClientState parse(Client & client) { return routeParse<CallbackCRTP, ExpectedHeaderArray>(client); }
     };
 
     /** The default route */

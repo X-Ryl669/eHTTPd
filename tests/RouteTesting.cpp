@@ -2,7 +2,7 @@
 #include <type_traits>
 #include <stdarg.h>
 
-// We need request lines too for testing
+// Declare the log function the HTTP server is using
 #define SLog logger
 static void logger(auto level, const char * msg, ...)
 {
@@ -21,26 +21,50 @@ static void logger(auto level, const char * msg, ...)
 
 using namespace Protocol::HTTP;
 using namespace Network::Servers::HTTP;
+using namespace CompileTime::Literals; // For ""_hash function
 
 auto Color = [](Client & client, const auto & headers)
 {
-    client.reply(Code::Ok, "Bah, it works");
-    return true;
+    // You can do a runtime method testing like this or a compile time testing while registering the route for a post method only
+    if (client.reqLine.method == Method::POST) {
+        HashFormPost<"some_param"_hash, "value"_hash> form;
+
+        if (!client.fetchContent(headers, form))
+        {
+            client.closeWithError(Code::BadRequest);
+            return true;
+        }
+
+        printf("Found param some_param = %.*s, value = %.*s\n",
+                form.getValue<"some_param"_hash>().getLength(), form.getValue<"some_param"_hash>().getData(),
+                form.getValue<"value"_hash>().getLength(), form.getValue<"value"_hash>().getData() );
+        client.reply(Code::Ok, form.getValue<"some_param"_hash>());
+        return true;
+    } else
+    {
+        client.reply(Code::Ok, "GET Color");
+        return true;
+    }
 };
 
 auto LongAnswer = [](Client & client, const auto & headers)
 {
     ROString longText = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.";
 
+    // Example to get an expected header from the client
+    auto lang = headers.template getHeader<Headers::AcceptLanguage>();
+    Language expected = lang.getValueElement(0);  // Shortcut method. You can use lang.getValueElementsCount to get the number of elements in a list header
 
+    // Or you can use the bare object hierarchy here too. The "parsed" member is always present, the first "value" can either be single or an array. In the latter case, you can access the final objet via "value"
+    printf("Value lang: %s\n", Refl::toString(lang.parsed.value[0].value));
     CaptureAnswer answer{
         Code::Ok,
         // Using initializer list here for each given type if any of them requires multiple value, else you can use the value directly
-        HeaderSet<Headers::ContentType, Headers::ContentLanguage>{ { MIMEType::text_plain }, { Language::en, Language::fr } },
+        HeaderSet<Headers::ContentType, Headers::ContentLanguage>{ { MIMEType::text_plain }, { expected, Language::fr } },
         [&]() { return longText.splitFrom(" ", true); }  // Give a word by word answer, this will be called as many times as there are words in the answer
     };
     // Another possibility to set the header
-//    answer.template setHeader<Headers::ContentType>(Protocol::HTTP::MIMEType::text_plain);
+//    answer.template setHeader<Headers::ContentType>(MIMEType::text_plain);
     return client.sendAnswer(answer, true);
 };
 
@@ -69,7 +93,7 @@ int main()
 {
     constexpr Router<
         Route<Color, MethodsMask{ Method::GET, Method::POST }, "/Color", Headers::ContentLength, Headers::Date, Headers::ContentDisposition>{},
-        Route<LongAnswer, Method::GET, "/long", Headers::Date >{},
+        Route<LongAnswer, Method::GET, "/long", Headers::Date, Headers::AcceptLanguage >{},
         DefaultRoute<CatchAll, Method::GET, Headers::Date >{}
     > router;
 

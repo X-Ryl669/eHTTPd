@@ -376,6 +376,9 @@ namespace Container
         inline uint32 vaultSize() const { return sizePowerOf2 - v; }
         /** Get the available size in the buffer */
         inline uint32 freeSize() const { return v - w; }
+        /** Get the maximum size that can be stored in this buffer (without overwriting the vault) */
+        inline uint32 maxSize() const { return v; }
+
         /** Stored the given amount in the transcient buffer (to be used with getTail later on)
             @warning Using the buffer directly is dangerous, make sure you're not overwriting the vault here */
         inline void stored(const uint32 s) { w += s; }
@@ -384,8 +387,10 @@ namespace Container
         inline uint8 * getTail() { return &buffer[w]; }
         /** Get the head of the transcient buffer */
         inline uint8 * getHead() { return buffer; }
-        /** Get the head of the transcient buffer */
+        /** Get the head of the vault buffer */
         inline uint8 * getVaultHead() { return &buffer[v]; }
+        /** Check if the given pointer is inside our buffer */
+        inline bool contains(const void * ptr) const { return ((const uint8*)ptr) >= buffer && ((const uint8*)ptr) < &buffer[sizePowerOf2]; }
 
         /** Get the transcient buffer as a view */
         template <typename T> inline T getView() {
@@ -456,6 +461,13 @@ namespace Container
             memcpy((buffer + v - size), packet, size);
             v -= size;
             return true;
+        }
+        /** Reserve some space for the vault */
+        uint8 * reserveInVault(uint32 size)
+        {
+            if (!canFit(size)) return nullptr;
+            v -= size;
+            return &buffer[v];
         }
         /** Save a string in the vault
             @param str  A pointer on the C string to save

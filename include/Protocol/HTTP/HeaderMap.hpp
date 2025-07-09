@@ -45,6 +45,13 @@ namespace Protocol::HTTP
         };
         #define WriteCheck(b, s, v) Protocol::HTTP::HeaderMap::SetOnExit __s(s, v); if (!b || s < v) return true;
 
+        template <typename Child>
+        struct LowLevelAccess
+        {
+            bool getDataPtr(void *& buffer, std::size_t & size) { size = sizeof(static_cast<Child*>(this)->value); buffer = &static_cast<Child*>(this)->value; return true; }
+            constexpr static std::size_t getDataSize() { return sizeof(Child::value); }
+        };
+
         /** Link a header with its type (with serializing function for both type) */
         struct ValueBase
         {
@@ -55,7 +62,7 @@ namespace Protocol::HTTP
         };
 
         /** String value (opaque) */
-        struct StringValue : public ValueBase, public PersistBase<StringValue>
+        struct StringValue : public ValueBase, public PersistBase<StringValue>, public LowLevelAccess<StringValue>
         {
             typedef ROString ValueType;
 
@@ -89,7 +96,7 @@ namespace Protocol::HTTP
         };
 
         /** Unsigned integer value (opaque) */
-        struct UnsignedValue : public ValueBase
+        struct UnsignedValue : public ValueBase, public LowLevelAccess<UnsignedValue>
         {
             typedef size_t ValueType;
 
@@ -111,7 +118,7 @@ namespace Protocol::HTTP
         };
 
         /** Simple enum value for the given type */
-        template <typename Enum, bool strict = false> struct EnumValue : public ValueBase
+        template <typename Enum, bool strict = false> struct EnumValue : public ValueBase, public LowLevelAccess<EnumValue<Enum, strict>>
         {
             typedef Enum ValueType;
 
@@ -154,7 +161,7 @@ namespace Protocol::HTTP
         };
         /** Enum value with quality factor ";q=[.0-9]+,token="
             The quality factor is ignored and so is any token */
-        template <typename Enum> struct EnumValueToken : public ValueBase
+        template <typename Enum> struct EnumValueToken : public ValueBase, public LowLevelAccess<EnumValueToken<Enum>>
         {
             typedef Enum ValueType;
             Enum value;
@@ -175,6 +182,8 @@ namespace Protocol::HTTP
             }
             void setValue(const Enum v) { value = v; }
         };
+
+#pragma pack(push, 1)
         /** Enum value that stores the key and value after ';' and before '=' */
         template <typename Enum> struct EnumKeyValue : public ValueBase, public PersistBase<EnumKeyValue<Enum>>
         {
@@ -215,10 +224,18 @@ namespace Protocol::HTTP
 
             void setValue(Enum v) { value = v; }
             void setValue(Enum v, const ROString & attr) { value = std::forward<Enum>(v); attributes = attr; }
+
+            bool getDataPtr(void *& buffer, std::size_t & size)
+            {
+                size = sizeof(value) + sizeof(attributes);
+                buffer = &value; // Expecting packed structure here, so saving both object at once
+                return true;
+            }
+            static constexpr std::size_t getDataSize() { return sizeof(value) + sizeof(attributes); }
         };
 
         template <typename E, size_t N, bool strict = false>
-        struct ValueList : public ValueBase
+        struct ValueList : public ValueBase, public PersistBase<ValueList<E, N, strict>>
         {
             E    value[N];
             size_t count = 0;
@@ -257,7 +274,7 @@ namespace Protocol::HTTP
             }
 
             void getStringToPersist(MaxPersistStringArray & arr) {
-                static_assert(arr.max_size() >= N && "Please increase the MaxPersistStringArray size if you've increased the ValueList size");
+                static_assert(sizeof(arr)/sizeof(arr[0]) >= N && "Please increase the MaxPersistStringArray size if you've increased the ValueList size");
                 for (size_t i = 1; i < count; i++) {
                     value[i].getStringToPersist(arr); arr[i] = arr[0];
                 }
@@ -291,7 +308,17 @@ namespace Protocol::HTTP
                     count = i+1;
                 }
             }
+
+            bool getDataPtr(void *& buffer, std::size_t & size)
+            {   // Can only answer to query the required size here, we can't reload here here
+                uint8 c = (uint8)count;
+                size = sizeof(c);
+                buffer = &c;
+                return false;
+            }
+            static constexpr std::size_t getDataSize() { return sizeof(uint8) + E::getDataSize() * N; }
         };
+#pragma pack(pop)
 
 
         template <> struct ValueMap<Headers::Accept>            { typedef ValueList<EnumValueToken<MIMEType>, 16, true> ExpectedType; };

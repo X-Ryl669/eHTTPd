@@ -93,9 +93,14 @@ namespace CompileTime
         return len ? static_cast<unsigned int>(*input) + 257 * constHash( input + 1, len - 1 ) : 5381;
     }
 
-    size_t constexpr operator "" _hash( const char* str, size_t len )
+    size_t constexpr operator ""_hash( const char* str, size_t len )
     {
         return constHash( str );
+    }
+
+    namespace Literals
+    {
+        using ::CompileTime::operator ""_hash;
     }
 }
 

@@ -3,6 +3,8 @@
 
 namespace Container
 {
+    /** Used for compiling, to show what a type is (the compiler will error out when trying to instantiate a undefined template) */
+    template <typename T> struct DumpTypeAtCompile;
     /** A plain old dumb typelist used to build variadic templates and functions arguments */
     template <typename...Types> struct TypeList{ static constexpr std::size_t size = sizeof...(Types); };
 

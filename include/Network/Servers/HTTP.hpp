@@ -21,7 +21,7 @@
 #include <cstddef>
 
 #ifndef ClientBufferSize
-  #define ClientBufferSize 256
+  #define ClientBufferSize 512
 #endif
 
 #ifdef UseTLSServer
@@ -114,6 +114,19 @@ namespace Network::Servers::HTTP
             }
             return std::get<pos>(headers);
         }
+        // Compile time version, faster O(1) at runtime, and smaller, obviously
+        template <Headers h>
+        const RequestHeader<h> & getHeader() const
+        {
+            constexpr std::size_t pos = findHeaderPos(h);
+            if constexpr (pos == headerArray.size())
+            {   // If the compiler stops here, you're querying a header that doesn't exist...
+                throw "Invalid header given for this type, it doesn't contain any";
+//                    static RequestHeader<h> invalid;
+//                    return invalid;
+            }
+            return std::get<pos>(headers);
+        }
 
         // Runtime version to test if we are interested in a specific header (speed up O(M*N) search to O(m*N) search instead)
         Headers acceptHeader(const ROString & header)
@@ -133,6 +146,90 @@ namespace Network::Servers::HTTP
                 return ((header == Refl::toString(headerArray[Is]) ? (err = std::get<Is>(headers).acceptValue(input), true) : false) || ...);
             }(std::make_index_sequence<sizeof...(Header)>{});
             return err;
+        }
+
+        constexpr std::size_t getRequiredVaultSize()
+        {
+            return [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
+                return (std::get<Is>(headers).parsed.getDataSize() + ...);
+            }(std::make_index_sequence<sizeof...(Header)>{});
+        }
+
+        static bool saveBuf(void * b, void * d, std::size_t s, uint8 *& buf, std::size_t & size)
+        {
+            if (s > size) return false;
+            memcpy(d, b, s);
+            buf += s;
+            size -= s;
+            return true;
+        }
+
+        template <typename T>
+        bool saveHeaderToBuffer(T & t, uint8 *& buf, std::size_t & size)
+        {
+            void * b = 0; std::size_t s = 0;
+            if (t.getDataPtr(b, s))
+                return saveBuf(b, buf, s, buf, size);
+
+            if constexpr(requires { t.count; }) {
+                if (!saveBuf(b, buf, s, buf, size)) return false;
+                for (std::size_t i = 0; i < t.count; i++)
+                {
+                    t.value[i].getDataPtr(b, s);
+                    if (!saveBuf(b, buf, s, buf, size)) return false;
+                }
+                return true;
+            } else return false;
+        }
+        template <typename T>
+        bool loadHeaderFromBuffer(T & t, uint8 *& buf, std::size_t & size)
+        {
+            void * b = 0; std::size_t s = 0;
+            if (t.getDataPtr(b, s))
+                return saveBuf(buf, b, s, buf, size);
+            if constexpr(requires { t.count; }) {
+                if (!saveBuf(buf, b, s, buf, size)) return false;
+                uint8 c = *(uint8*)b;
+                for (std::size_t i = 0; i < c; i++)
+                {
+                    t.value[i].getDataPtr(b, s);
+                    if (!saveBuf(buf, b, s, buf, size)) return false;
+                }
+                t.count = c;
+                return true;
+            } else return false;
+        }
+
+        template <std::size_t N>
+        bool saveInVault(Container::TranscientVault<N> & buffer)
+        {
+            std::size_t size = getRequiredVaultSize();
+            // Save the buffer to the stack before being erased (in reverse order)
+            if (uint8 * buf = buffer.reserveInVault(size))
+            {
+                // Got a buffer, it's time to save all of our stuff in that buffer
+                bool ret = [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
+                    return (saveHeaderToBuffer(std::get<Is>(headers).parsed, buf, size) && ...);
+                }(std::make_index_sequence<sizeof...(Header)>{});
+                return ret;
+            }
+            return false;
+        }
+
+        template <std::size_t N>
+        bool loadFromVault(Container::TranscientVault<N> & buffer)
+        {
+            std::size_t size = buffer.vaultSize();
+            // Save the buffer to the stack before being erased (in reverse order)
+            if (uint8 * buf = buffer.getVaultHead())
+            {
+                // Got a buffer, it's time to save all of our stuff in that buffer
+                bool ret = [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
+                    return (loadHeaderFromBuffer(std::get<Is>(headers).parsed, buf, size) && ...);
+                }(std::make_index_sequence<sizeof...(Header)>{});
+                return ret;
+            }
+            return false;
         }
     };
 
@@ -199,10 +296,31 @@ namespace Network::Servers::HTTP
     /** Convert the list of headers you're expecting to the matching HeadersArray the library is using */
     template <Headers ... allowedHeaders>
     struct ToHeaderArray {
-        static constexpr size_t HeaderCount = sizeof...(allowedHeaders);
-        static constexpr auto headersArray = Container::getUnique<std::array<Headers, HeaderCount>{allowedHeaders...}, std::array<Headers, 1> {Headers::Authorization}>();
+        static constexpr auto headersArray = Container::getUnique<std::array{allowedHeaders...}, std::array{Headers::Authorization}>();
         typedef HeadersArray<headersArray, decltype(Container::makeTypes<Details::MakeRequest, headersArray>())> Type;
     };
+
+    /** Convert the list of headers you're expecting to the matching HeadersArray the library is using */
+    template <Headers ... allowedHeaders>
+    struct ToPostHeaderArray {
+        static constexpr auto headersArray = Container::getUnique<std::array{allowedHeaders...}, std::array{Headers::ContentType, Headers::ContentLength}>();
+        typedef HeadersArray<headersArray, decltype(Container::makeTypes<Details::MakeRequest, headersArray>())> Type;
+    };
+
+
+    template <MethodsMask mask, Headers ... allowedHeaders>
+    struct MakeHeadersArray {
+        // Select the best header array implementation here
+        static constexpr auto bestHeaderArray() {
+            if constexpr (mask.mask & MethodsMask{Method::POST, Method::PUT}.mask)
+                return typename ToPostHeaderArray<allowedHeaders...>::Type{};
+            else
+                return typename ToHeaderArray<allowedHeaders...>::Type{};
+        }
+
+        typedef decltype(bestHeaderArray()) Type;
+    };
+
 
     template <Headers ... answerHeaders>
     struct ToAnswerHeader {
@@ -212,7 +330,105 @@ namespace Network::Servers::HTTP
     };
 
 
+    /** Store the result of a form that's was posted  */
+    template <CompileTime::str ... keys>
+    struct FormPost
+    {
+        typedef int IsAFormPost; // Simpler to require a member than a template in constexpr expression later on
 
+        /** Where the found values are stored */
+        ROString values[sizeof...(keys)];
+
+        static constexpr std::size_t findKeyPos(const ROString key)
+        {
+            std::size_t pos = 0;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
+                return ((key == keys ? false : ++pos) && ...);
+            }(std::make_index_sequence<sizeof...(keys)>{});
+            return pos;
+        }
+
+        static constexpr std::size_t keysCount() { return sizeof...(keys); }
+
+        /** Get the value for the given key */
+        ROString getValue(const ROString key)
+        {
+            std::size_t pos = findKeyPos(key);
+            if (pos == keysCount()) return ROString();
+            return values[pos];
+        }
+
+        /** Parse the values from the keys and the given buffer */
+        void parse(ROString buffer)
+        {
+            // Escape all URL encoded char here
+            buffer = Path::URLDecode(buffer);
+            while (buffer)
+            {
+                ROString key = buffer.splitUpTo("=");
+                if (key) {
+                    std::size_t p = findKeyPos(key);
+                    if (p == keysCount()) (void)buffer.splitUpTo("&");
+                    else values[p] = buffer.splitUpTo("&");
+                }
+            }
+        }
+    };
+
+    /** Store the result of a form that's was posted  */
+    template <size_t ... keysHash>
+    struct HashFormPost
+    {
+        typedef int IsAFormPost; // Simpler to require a member than a template in constexpr expression later on
+
+        /** Where the found values are stored */
+        ROString values[sizeof...(keysHash)];
+
+        static constexpr std::size_t findKeyPos(const size_t keyHash)
+        {
+            std::size_t pos = 0;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
+                return ((keyHash == keysHash ? false : ++pos) && ...);
+            }(std::make_index_sequence<sizeof...(keysHash)>{});
+            return pos;
+        }
+
+        static constexpr std::size_t keysCount() { return sizeof...(keysHash); }
+
+        /** Get the value for the given key */
+        ROString getValue(const ROString key) { return getValue(CompileTime::constHash(key.getData(), key.getLength())); }
+
+        /** Get the value for the given key */
+        ROString getValue(const size_t key)
+        {
+            std::size_t pos = findKeyPos(key);
+            if (pos == keysCount()) return ROString();
+            return values[pos];
+        }
+        /** Compile time version (even faster, since position is computed at compile time) */
+        template <size_t hash>
+        ROString getValue() {
+            constexpr std::size_t pos = findKeyPos(hash);
+            if (pos == keysCount()) return ROString();
+            return values[pos];
+        }
+
+        /** Parse the values from the keys and the given buffer */
+        void parse(ROString buffer)
+        {
+            // Escape all URL encoded char here
+            buffer = Path::URLDecode(buffer);
+            while (buffer)
+            {
+                ROString key = buffer.splitUpTo("=");
+                if (key) {
+                    std::size_t p = findKeyPos(CompileTime::constHash(key.getData(), key.getLength()));
+                    if (p == keysCount()) (void)buffer.splitUpTo("&");
+                    else values[p] = buffer.splitUpTo("&");
+                }
+            }
+        }
+    };
 
 
     /** A client which is linked with a single session.
@@ -345,19 +561,17 @@ namespace Network::Servers::HTTP
 
 
         uint32 persistVaultSize = 0;
+        inline bool hasPersistedHeaders() const { return recvBuffer.vaultSize() > persistVaultSize; }
 
         template <typename Headers>
         Client & routeFound(Headers & headers)
         {
-            if (parsingStatus == NeedRefillHeaders)
-            {   // Need to reload all headers from the vault here (if any saved)
-                if (recvBuffer.vaultSize() >= persistVaultSize)
-                {   // Reload the header from the vault here
-                    ROString vault = recvBuffer.getVaultView<ROString>();
-                    memcpy(&headers, vault.getData(), sizeof(headers));
-                    // Discard the headers from the vault so we can have space for any new string to persist
-                    recvBuffer.resetVault(persistVaultSize);
-                }
+            // Need to reload all headers from the vault here (if any saved)
+            if (hasPersistedHeaders())
+            {   // Reload the header from the vault here
+                headers.loadFromVault(recvBuffer);
+                // Discard the headers from the vault so we can have space for any new string to persist
+                recvBuffer.resetVault(persistVaultSize);
             }
             return *this;
         }
@@ -369,13 +583,55 @@ namespace Network::Servers::HTTP
             {
                 // Save the actual used size for persisted strings (that won't be reset on the next parsing)
                 persistVaultSize = recvBuffer.vaultSize();
-                // Save the current header array to the vault as-is. It's a poor man serialization, but it should work
-                if (!recvBuffer.saveInVault((const uint8*)&headers, sizeof(headers))) {
+                // Save the current header array to the vault
+                if (!headers.saveInVault(recvBuffer)) {
                     closeWithError(Code::InternalServerError);
                     return ClientState::Error;
                 }
             }
             return ClientState::NeedRefill;
+        }
+
+        template <typename T>
+        bool fetchContent(const auto & headers, T & content)
+        {
+            // This must be called after the header are parsed
+            if (parsingStatus != HeadersDone) return false;
+
+            // Extract the expected content length from the current receiving buffer
+            auto length = headers.template getHeader<Headers::ContentLength>();
+            size_t expLength = length.getValueElement(0);
+
+            if (recvBuffer.maxSize() < expLength)
+            {   // TODO: Incremental parsing to only extract the keys we are interested in
+                // Right now, it's not possible to store the content in the receiving buffer
+                return false;
+            }
+            if (recvBuffer.getSize() < expLength)
+            {
+                // Need to fetch the missing content
+                Error ret = socket.recv((char*)recvBuffer.getTail(), 0, expLength - recvBuffer.getSize());
+                if (ret.isError()) return false;
+                recvBuffer.stored(ret.getCount());
+            }
+
+            // Then parse it
+            auto type = headers.template getHeader<Headers::ContentType>();
+            if constexpr(requires{ typename T::IsAFormPost; })
+            {
+                if (type.getValueElement(0) == MIMEType::application_xWwwFormUrlencoded)
+                {
+                    ROString input = recvBuffer.getView<ROString>();
+                    content.parse(input);
+                    return true;
+                }
+
+                // Not supported yet
+                return false;
+            } else {
+                // Multipart not supported yet
+                return false;
+            }
         }
 
         bool parse() {
@@ -448,7 +704,7 @@ namespace Network::Servers::HTTP
             parsingStatus = Invalid;
             socket.reset();
             answerLength = 0;
-
+            persistVaultSize = 0;
         }
 
     };
@@ -648,6 +904,12 @@ namespace Network::Servers::HTTP
 
     bool Client::reply(Code statusCode, const ROString & msg, bool close)
     {
+        // Check if the msg is in the recv buffer (can happen with request with content), and in that case, it need to be persisted in the vault
+        // or it'll be overwritten while replying
+        if (recvBuffer.contains(msg.getData()))
+        {   // Persist it
+            if (!Container::persistString(const_cast<ROString&>(msg), recvBuffer, recvBuffer.getSize())) return false;
+        }
         return sendAnswer(SimpleAnswer<MIMEType::text_plain>{statusCode, msg }, close);
     }
     bool Client::reply(Code statusCode) { return sendAnswer(CodeAnswer{statusCode}, true); }
