@@ -574,6 +574,7 @@ namespace Refl
     template <> constexpr bool isCaseSensitive<Protocol::HTTP::Charset> = false;
     template <> constexpr bool isCaseSensitive<Protocol::HTTP::Language> = false;
 
+
     template <> constexpr bool isSorted<Protocol::HTTP::Method> = true;
     template <> constexpr bool isSorted<Protocol::HTTP::Headers> = true;
     template <> constexpr bool isSorted<Protocol::HTTP::Charset> = true;
@@ -591,6 +592,24 @@ namespace Refl
     template <> constexpr bool isSorted<Protocol::HTTP::TextType> = true;
 #endif
     template <> constexpr bool isSorted<Protocol::HTTP::MIMEType> = true;
+
+#if defined(UseHashForReflection)
+    template <> constexpr bool useHash<Protocol::HTTP::Charset> = true;
+    template <> constexpr bool useHash<Protocol::HTTP::Encoding> = true;
+    template <> constexpr bool useHash<Protocol::HTTP::CacheControl> = true;
+    template <> constexpr bool useHash<Protocol::HTTP::Connection> = true;
+    template <> constexpr bool useHash<Protocol::HTTP::Language> = true;
+  #if defined(MaxSupport)
+    template <> constexpr bool useHash<Protocol::HTTP::ApplicationType> = true;
+    template <> constexpr bool useHash<Protocol::HTTP::AudioType> = true;
+    template <> constexpr bool useHash<Protocol::HTTP::FontType> = true;
+    template <> constexpr bool useHash<Protocol::HTTP::ImageType> = true;
+    template <> constexpr bool useHash<Protocol::HTTP::ModelType> = true;
+    template <> constexpr bool useHash<Protocol::HTTP::MultipartType> = true;
+    template <> constexpr bool useHash<Protocol::HTTP::TextType> = true;
+  #endif
+    template <> constexpr bool useHash<Protocol::HTTP::MIMEType> = true;
+#endif
 
     namespace Details { template <Enum E, std::size_t ... i > struct ReflectHTTPHeader { static constexpr std::array<const char*, sizeof...(i)> values = {CompileTime::str_ref<Protocol::HTTP::makeHTTPHeader<enum_raw_name_only_str<E, (int)i>()>()>{}.data...}; }; }
 #if defined(MaxSupport)

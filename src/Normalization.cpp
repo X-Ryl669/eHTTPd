@@ -98,7 +98,8 @@ namespace Path {
         size_t i = 0, o = 0;
         while (i < input.getLength())
         {
-            if (s[i] != '%' || i == (input.getLength() - 2)) dest[o++] = s[i]; // A valid percent encoding requires at least % + 1 hexadecimal character
+            if (s[i] == '+') dest[o++] = ' ';
+            else if (s[i] != '%' || i == (input.getLength() - 2)) dest[o++] = s[i]; // A valid percent encoding requires at least % + 1 hexadecimal character
             else {
                 // Check no encoding
                 char first = s[i+1];

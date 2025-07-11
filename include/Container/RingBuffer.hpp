@@ -498,7 +498,6 @@ namespace Container
             return 0;
         }
 
-
         /** Build the ring buffer */
         TranscientVault() : w(0), v(sizePowerOf2)
         {

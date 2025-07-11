@@ -234,11 +234,12 @@ namespace Protocol::HTTP
             static constexpr std::size_t getDataSize() { return sizeof(value) + sizeof(attributes); }
         };
 
-        template <typename E, size_t N, bool strict = false>
-        struct ValueList : public ValueBase, public PersistBase<ValueList<E, N, strict>>
+        template <typename E, size_t _N, bool strict = false>
+        struct ValueList : public ValueBase, public PersistBase<ValueList<E, _N, strict>>
         {
-            E    value[N];
-            size_t count = 0;
+            E    value[_N];
+            uint8 count = 0; // Use a uint8 to avoid a dangling pointer in getDataPtr
+            static constexpr uint8 N = (uint8)_N;
             virtual ParsingError parseFrom(ROString & val) {
                 ParsingError err;
                 for(count = 0; count < N;) {
@@ -252,14 +253,14 @@ namespace Protocol::HTTP
             {
                 if (!count) { size = 0; return true; }
                 size_t s = 0, vs = 0;
-                for (size_t i = 0; i < count; i++)
+                for (uint8 i = 0; i < count; i++)
                 {
                     if (!value[i].write(0, vs)) return false;
                     s += vs + 1;
                 }
 
                 WriteCheck(buffer, size, s - 1);
-                for (size_t i = 0; i < count; i++) {
+                for (uint8 i = 0; i < count; i++) {
                     vs = size;
                     if (!value[i].write(buffer, vs)) return false;
                     if (i < count - 1) memcpy(buffer + vs, ",", 1);
@@ -268,52 +269,51 @@ namespace Protocol::HTTP
                 return true;
             }
             public: template <typename T> inline bool persist(T & buffer, std::size_t futureDrop = 0) {
-                for (size_t i = 0; i < count; i++)
+                for (uint8 i = 0; i < count; i++)
                     if (!value[i].persist(buffer, futureDrop)) return false;
                 return true;
             }
 
             void getStringToPersist(MaxPersistStringArray & arr) {
                 static_assert(sizeof(arr)/sizeof(arr[0]) >= N && "Please increase the MaxPersistStringArray size if you've increased the ValueList size");
-                for (size_t i = 1; i < count; i++) {
+                for (uint8 i = 1; i < count; i++) {
                     value[i].getStringToPersist(arr); arr[i] = arr[0];
                 }
                 value[0].getStringToPersist(arr);
             }
 
-            void setValue(const E v, const size_t pos = 0) { if (pos < N) { value[pos] = v; if (pos > count) count = pos; } }
+            void setValue(const E v, const size_t pos = 0) { if (pos < N) { value[pos] = v; if (pos > count) count = (uint8)pos; } }
 
             template <typename ... U>
             requires ((std::is_same_v<std::decay_t<U>, typename E::ValueType> && ...))
             void setValue(U && ... values) {
-                static_assert(sizeof...(values) <= N && "The given parameter list is larger than the array");
+                static_assert(sizeof...(values) <= _N && "The given parameter list is larger than the array");
                 [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
                     return ((value[Is].setValue(std::forward<U>(values)), true) && ...);
                 }(std::make_index_sequence<sizeof...(values)>{});
-                count = sizeof...(values);
+                count = (uint8)sizeof...(values);
             }
 
             template <std::size_t M>
             requires (M <= N)
             void setValue(E (&arr)[M]) {
                 for (std::size_t i = 0; i < M; i++) value[i] = arr[i];
-                count = M;
+                count = (uint8)M;
             }
 
             void setValue(std::initializer_list<typename E::ValueType> && il) {
                 auto e = il.begin();
-                for (std::size_t i = 0; i < std::min(il.size(), N); i++) {
+                for (std::size_t i = 0; i < std::min(il.size(), _N); i++) {
                     value[i].setValue(*e);
                     ++e;
-                    count = i+1;
+                    count = (uint8)(i+1);
                 }
             }
 
             bool getDataPtr(void *& buffer, std::size_t & size)
             {   // Can only answer to query the required size here, we can't reload here here
-                uint8 c = (uint8)count;
-                size = sizeof(c);
-                buffer = &c;
+                size = sizeof(count);
+                buffer = &count;
                 return false;
             }
             static constexpr std::size_t getDataSize() { return sizeof(uint8) + E::getDataSize() * N; }

@@ -165,40 +165,27 @@ namespace Network::Servers::HTTP
         }
 
         template <typename T>
-        bool saveHeaderToBuffer(T & t, uint8 *& buf, std::size_t & size)
+        bool serializeHeaderToBuffer(T & t, uint8 *& buf, std::size_t & size, void * b, void * src, void * dest)
         {
-            void * b = 0; std::size_t s = 0;
+            std::size_t s = 0;
             if (t.getDataPtr(b, s))
-                return saveBuf(b, buf, s, buf, size);
+                return saveBuf(src, dest, s, buf, size);
 
             if constexpr(requires { t.count; }) {
-                if (!saveBuf(b, buf, s, buf, size)) return false;
-                for (std::size_t i = 0; i < t.count; i++)
+                if (!saveBuf(src, dest, s, buf, size)) return false;
+                for (uint8 i = 0; i < t.count; i++)
                 {
                     t.value[i].getDataPtr(b, s);
-                    if (!saveBuf(b, buf, s, buf, size)) return false;
+                    if (!saveBuf(src, dest, s, buf, size)) return false;
                 }
                 return true;
             } else return false;
         }
+
         template <typename T>
-        bool loadHeaderFromBuffer(T & t, uint8 *& buf, std::size_t & size)
-        {
-            void * b = 0; std::size_t s = 0;
-            if (t.getDataPtr(b, s))
-                return saveBuf(buf, b, s, buf, size);
-            if constexpr(requires { t.count; }) {
-                if (!saveBuf(buf, b, s, buf, size)) return false;
-                uint8 c = *(uint8*)b;
-                for (std::size_t i = 0; i < c; i++)
-                {
-                    t.value[i].getDataPtr(b, s);
-                    if (!saveBuf(buf, b, s, buf, size)) return false;
-                }
-                t.count = c;
-                return true;
-            } else return false;
-        }
+        bool saveHeaderToBuffer(T & t, uint8 *& buf, std::size_t & size) { void * b = 0; return serializeHeaderToBuffer(t, buf, size, b, b, buf); }
+        template <typename T>
+        bool loadHeaderFromBuffer(T & t, uint8 *& buf, std::size_t & size) { void * b = 0; return serializeHeaderToBuffer(t, buf, size, b, buf, b); }
 
         template <std::size_t N>
         bool saveInVault(Container::TranscientVault<N> & buffer)
@@ -376,10 +363,10 @@ namespace Network::Servers::HTTP
     };
 
     /** Store the result of a form that's was posted  */
-    template <size_t ... keysHash>
+    template <unsigned ... keysHash>
     struct HashFormPost
     {
-        typedef int IsAFormPost; // Simpler to require a member than a template in constexpr expression later on
+        typedef int IsAFormPost; // Simpler to "requires" this member than a complex template in constexpr expression later on
 
         /** Where the found values are stored */
         ROString values[sizeof...(keysHash)];
@@ -399,14 +386,14 @@ namespace Network::Servers::HTTP
         ROString getValue(const ROString key) { return getValue(CompileTime::constHash(key.getData(), key.getLength())); }
 
         /** Get the value for the given key */
-        ROString getValue(const size_t key)
+        ROString getValue(const unsigned key)
         {
             std::size_t pos = findKeyPos(key);
             if (pos == keysCount()) return ROString();
             return values[pos];
         }
         /** Compile time version (even faster, since position is computed at compile time) */
-        template <size_t hash>
+        template <unsigned hash>
         ROString getValue() {
             constexpr std::size_t pos = findKeyPos(hash);
             if (pos == keysCount()) return ROString();

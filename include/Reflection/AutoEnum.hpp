@@ -242,6 +242,7 @@ namespace Refl
 
     template <Enum E> constexpr bool isCaseSensitive = true;
     template <Enum E> constexpr bool isSorted = false;
+    template <Enum E> constexpr bool useHash = false;
 
     template <Enum E>
     constexpr inline auto &_supports()
@@ -249,6 +250,17 @@ namespace Refl
         constexpr auto maxV = Refl::find_max_value<E, 0>();
         return *[]<std::size_t ... i>(std::index_sequence<i...>) { return &Details::Reflect<E, i...>::values; }(std::make_index_sequence<maxV+1>{});
 //        return *[]<std::size_t ... i>(std::index_sequence<i ...>) constexpr { constexpr static std::array<const char*, maxV+1> values = {Refl::enum_raw_name_only<E, (int)i>()...}; return &values; }(std::make_index_sequence<maxV+1>{});
+    }
+
+    namespace Details { template <Enum E, std::size_t ... i > struct ReflectHashes {
+        static constexpr std::array<const unsigned, sizeof...(i)> values = {
+            (isCaseSensitive<E> ? CompileTime::constHash(_supports<E>()[i]) : CompileTime::constHashCI(_supports<E>()[i]))...
+        };};}
+    template <Enum E>
+    constexpr inline auto &_allHashes()
+    {
+        constexpr auto maxV = Refl::find_max_value<E, 0>();
+        return *[]<std::size_t ... i>(std::index_sequence<i...>) { return &Details::ReflectHashes<E, i...>::values; }(std::make_index_sequence<maxV+1>{});
     }
     template <Enum E>
     inline constexpr const char * toString(E m)
@@ -275,7 +287,18 @@ namespace Refl
     template <Enum E>
     inline constexpr Opt<E> fromString(const ROString & string)
     {
-        if constexpr (isSorted<E>) {
+        if constexpr (useHash<E>) {
+            // Try O(N) search in the table of hash (sorry, we aren't sorting the table yet)
+            // Storing the hashes should take less binary space than the whole string so it's a size vs performance optimization here
+            constexpr auto & sup = _allHashes<E>();
+            unsigned h = 0;
+            if constexpr (isCaseSensitive<E>) h = CompileTime::constHash(string.getData(), string.getLength());
+            else h = CompileTime::constHashCI(string.getData(), string.getLength());
+
+            for (auto i = 0; i < sup.size(); i++)
+                if (h == sup[i]) return Opt<E>{(E)i};
+        }
+        else if constexpr (isSorted<E>) {
             // A dichotomic search into an enum name to value not performing O(log N) search here
             constexpr auto & sup = _supports<E>();
             const char * p = string.getData();
