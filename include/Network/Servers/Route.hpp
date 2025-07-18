@@ -38,16 +38,6 @@ namespace Network::Servers::HTTP
         >>{}); // Who said we can't feed brainfuck to C++ compiler?
     };
 
-    /** The log callback function that expected from the server. The signature is:
-        @code
-            void ALogFunction(Network::Level, static const char * message with printf like formatting, arguments...)
-        @endcode
-        By default a null-log function is used */
-    template<typename Func>
-    concept LogCallback = requires (Func f, Level l, const char * msg) {
-        f(l, msg);
-        f(l, msg, 1);
-    };
 
 #ifndef SLog
     // If no log function defined, let's define a no-op stub here
@@ -258,14 +248,14 @@ namespace Network::Servers::HTTP
     };
 
 
-        /** The server itself.
+    /** The server itself.
         The server roles is to maintain a list of client's resources and perform the network activity work
         That is:
         1. Monitoring for network activity
         2. Fetching data and accepting connections
         3. Sending data back to clients
         4. Managing session/cookies between clients */
-    template <auto Router/*, LogCallback auto logCB = noLog*/, std::size_t MaxClientCount = 4>
+    template <auto Router, std::size_t MaxClientCount = 4>
     struct Server
     {
         /** The main client array that's allocated upon construction and never desallocated */
@@ -305,7 +295,7 @@ namespace Network::Servers::HTTP
                         closeClient(client, Code::EntityTooLarge);
                         continue;
                     }
-                    Error ret = client->socket.recv((char*)client->recvBuffer.getTail(), 0, availableLength);
+                    Error ret = client->socket.recv((char*)client->recvBuffer.getTail(), availableLength);
                     if (ret.isError())
                     {
                         closeClient(client, Code::BadRequest);
@@ -316,8 +306,6 @@ namespace Network::Servers::HTTP
                     // Then parse the client code here at best as we can
                     if (!client->parse()) closeClient(client);
                     else {
-//                        SLog(Level::Debug, "Client %s[%.*s]", client->socket.address, client->reqLine.URI.absolutePath.getLength(), client->reqLine.URI.absolutePath.getData());
-
                         // Check if we can query the routes now
                         if (client->parsingStatus > Client::RecvHeaders)
                         {   // Yes we can, trigger the router with them

@@ -23,7 +23,7 @@ template <typename T> concept Enum = std::is_enum_v<T>;
 
 namespace Refl
 {
-    namespace Details { template <auto str> struct Wrapper { static constexpr auto v = str; }; }
+    namespace Details { template <auto str> struct Wrapper { static constexpr auto v = str; }; template <typename ... T> constexpr bool always_false = false;  }
 
     constexpr const char * find(const char * str, char l, std::size_t off = 0, char avoid = 0)
     {
@@ -249,7 +249,6 @@ namespace Refl
     {
         constexpr auto maxV = Refl::find_max_value<E, 0>();
         return *[]<std::size_t ... i>(std::index_sequence<i...>) { return &Details::Reflect<E, i...>::values; }(std::make_index_sequence<maxV+1>{});
-//        return *[]<std::size_t ... i>(std::index_sequence<i ...>) constexpr { constexpr static std::array<const char*, maxV+1> values = {Refl::enum_raw_name_only<E, (int)i>()...}; return &values; }(std::make_index_sequence<maxV+1>{});
     }
 
     namespace Details { template <Enum E, std::size_t ... i > struct ReflectHashes {
@@ -265,8 +264,13 @@ namespace Refl
     template <Enum E>
     inline constexpr const char * toString(E m)
     {
-        constexpr auto & sup = _supports<E>();
-        return (unsigned)m < sup.size() ? sup[(size_t)m] : "";
+        if constexpr (useHash<E>) {
+            static_assert(Details::always_false<E> && "If you're using hashes to store the enum, it's only useful to save binary size (storing hash vs whole string). But as soon as you use toString, the whole string is saved and the hashes are just wasted space");
+            return nullptr;
+        } else {
+            constexpr auto & sup = _supports<E>();
+            return (unsigned)m < sup.size() ? sup[(size_t)m] : "";
+        }
     }
     template <Enum E>
     struct Opt
@@ -290,6 +294,7 @@ namespace Refl
         if constexpr (useHash<E>) {
             // Try O(N) search in the table of hash (sorry, we aren't sorting the table yet)
             // Storing the hashes should take less binary space than the whole string so it's a size vs performance optimization here
+            // This doesn't make sense if you're using the toString for this enum, since toString involves storing the full strings here, so don't set useHash<E> = true in that case
             constexpr auto & sup = _allHashes<E>();
             unsigned h = 0;
             if constexpr (isCaseSensitive<E>) h = CompileTime::constHash(string.getData(), string.getLength());

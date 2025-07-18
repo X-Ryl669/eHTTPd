@@ -20,11 +20,11 @@
 typedef uint64_t uint64;
 typedef uint32_t uint32;
 typedef uint16_t uint16;
-typedef uint8_t uint8;
-typedef int8_t int8;
-typedef int16_t int16;
-typedef int32_t int32;
-typedef int64_t int64;
+typedef uint8_t  uint8;
+typedef int8_t   int8;
+typedef int16_t  int16;
+typedef int32_t  int32;
+typedef int64_t  int64;
 
 // Declare useful helpers functions
 /** Compute the minimum between the 2 given parameters */
@@ -62,11 +62,13 @@ inline void free0(T*& t) { free(t); t = 0; }
      x / (2^n - 1) = x * (2^n + 1) / [(2^n + 1)*(2^n - 1)] = (x*2^n + x) / (2^(2n) - 1) ~= (x<<n + x) >> (2*n)
     Since 2^(2n) - 1 ~= 2^2n, we commit a smaller error than if we divided by shifting right initially by n.
     So, for example, for x in [0-65536] range, and dividing by 255, this approximation gives no error
+    See https://godbolt.org/z/ss7xra9e4 for benchmark, it's a tad faster than a simple division (or multiplication by reciprocal and shift)
     @param x        The number to divide by (2^power - 1)
     @param power    The power that used to compute 2^power - 1, for example, it's 8 for 255 */
 inline uint32 divPowerOfTwoMinus1(uint32 x, uint8 power)
 {
-    uint32 num = ((x << power) + x);
+    uint32 y = x+1;
+    uint32 num = ((y << power) + y);
     return num >> (2*power);
 }
 
@@ -150,11 +152,11 @@ void setResetBit(T & reg, const bool enable, const uint8 bit) { return setResetB
 
 inline uint16 EndianSwap(uint16 value) { return (value >> 8) | (value << 8) ; }
 inline uint32 EndianSwap(uint32 value) { value = ((value << 8) & 0xFF00FF00 ) | ((value >> 8) & 0xFF00FF ); return (value >> 16) | (value << 16) ; }
-inline uint64 EndianSwap(uint64 value) 
+inline uint64 EndianSwap(uint64 value)
 {
     value = ((value << 8) & 0xFF00FF00FF00FF00ULL ) | ((value >> 8) & 0x00FF00FF00FF00FFULL );
-    value = ((value << 16) & 0xFFFF0000FFFF0000ULL ) | ((value >> 16) & 0x0000FFFF0000FFFFULL ); 
-    return (value >> 32) | (value << 32); 
+    value = ((value << 16) & 0xFFFF0000FFFF0000ULL ) | ((value >> 16) & 0x0000FFFF0000FFFFULL );
+    return (value >> 32) | (value << 32);
 }
 
 /** A cross platform bitfield class that should be used in union like this:

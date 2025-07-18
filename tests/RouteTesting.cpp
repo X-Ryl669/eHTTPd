@@ -69,11 +69,24 @@ auto LongAnswer = [](Client & client, const auto & headers)
         Code::Ok,
         // Using initializer list here for each given type if any of them requires multiple value, else you can use the value directly
         HeaderSet<Headers::ContentType, Headers::ContentLanguage>{ { MIMEType::text_plain }, { expected, Language::fr } },
-        [&]() { return longText.splitFrom(" ", true); }  // Give a word by word answer, this will be called as many times as there are words in the answer
+        [&]() { return longText.splitFrom(" ", true); }  // Give a word by word answer, this will be called as many times as there are words in the answer, sending a chunk each time
     };
     // Another possibility to set the header
     // answer.template setHeader<Headers::ContentType>(MIMEType::text_plain);
     return client.sendAnswer(answer, true);
+};
+
+// Example to receive a posted file from the client in a POST form
+auto PostFile = [](Client & client, const auto & headers)
+{
+    Streams::FileOutput formFile("upload.out");
+    if (!client.fetchContent(headers, formFile))
+    {
+        client.closeWithError(Code::BadRequest);
+        return true;
+    }
+    client.reply(Code::Ok, "Done");
+    return true;
 };
 
 // Example to show how you could write your file serving route (catch all)
@@ -107,6 +120,7 @@ int main()
     constexpr Router<
         Route<Color, MethodsMask{ Method::GET, Method::POST }, "/Color", Headers::ContentLength, Headers::Date, Headers::ContentDisposition>{},
         Route<LongAnswer, Method::GET, "/long", Headers::Date, Headers::AcceptLanguage >{},
+        Route<PostFile, Method::POST, "/postFile", Headers::ContentType >{},
         DefaultRoute<CatchAll, Method::GET, Headers::Date >{}
     > router;
 

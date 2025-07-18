@@ -103,7 +103,7 @@ namespace Streams
         struct NoContent
         {
             std::size_t getSize() const             { return 0; }
-            bool hasContent() const                { return false; }
+            bool hasContent() const                 { return false; }
         };
 
         /** A with content stream */
@@ -325,6 +325,42 @@ namespace Streams
             return s;
         }
     };
+
+
+    /** Copy a stream to another one until either one fails or the total amount specified is reached
+        @return the number of bytes copied */
+    template <typename In, typename Out>
+    std::size_t copy(In & in, Out & out, const std::size_t size = (std::size_t)-1)
+    {
+        uint8 buffer[256];
+        std::size_t total = 0, step = 0;
+        while (true)
+        {
+            step = in.read(buffer, min(size - total, sizeof(buffer)));
+            if (step == 0) return total;
+            std::size_t c = out.write(buffer, step);
+            if (c != step) { total += c; return total; }
+            total += c;
+            if (size == total) return total;
+        }
+    }
+
+    /** Copy a stream to another one until either one fails or the total amount specified is reached, using the given buffer
+        @return the number of bytes copied */
+    template <typename In, typename Out>
+    std::size_t copy(In & in, Out & out, uint8 * buffer, std::size_t bufSize, const std::size_t size = (std::size_t)-1)
+    {
+        std::size_t total = 0, step = 0;
+        while (true)
+        {
+            step = in.read(buffer,  min(size - total, bufSize));
+            if (step == 0) return total;
+            std::size_t c = out.write(buffer, step);
+            if (c != step) { total += c; return total; }
+            total += c;
+            if (size == total) return total;
+        }
+    }
 
 }
 

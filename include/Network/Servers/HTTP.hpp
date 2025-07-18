@@ -24,11 +24,6 @@
   #define ClientBufferSize 512
 #endif
 
-#ifdef UseTLSServer
-  #define Socket MBTLSSocket
-#else
-  #define Socket BaseSocket
-#endif
 
 
 #define container_of(pointer, type, member)                                                        \
@@ -37,6 +32,12 @@
 
 namespace Network::Servers::HTTP
 {
+#ifdef UseTLSServer
+    typedef MBTLSSocket Socket;
+#else
+    typedef BaseSocket Socket;
+#endif
+
     static constexpr const char HTTPAnswer[] = "HTTP/1.1 ";
     static constexpr const char EOM[] = "\r\n\r\n";
     static constexpr const char BadRequestAnswer[] = "HTTP/1.1 400 Bad request\r\n\r\n";
@@ -155,19 +156,20 @@ namespace Network::Servers::HTTP
             }(std::make_index_sequence<sizeof...(Header)>{});
         }
 
-        static bool saveBuf(void * b, void * d, std::size_t s, uint8 *& buf, std::size_t & size)
+        static bool saveBuf(void * src, void * dest, std::size_t s, uint8 *& buf, std::size_t & size)
         {
             if (s > size) return false;
-            memcpy(d, b, s);
+            memcpy(dest, src, s);
             buf += s;
             size -= s;
             return true;
         }
 
         template <typename T>
-        bool serializeHeaderToBuffer(T & t, uint8 *& buf, std::size_t & size, void * b, void * src, void * dest)
+        static bool serializeHeaderToBuffer(T & t, uint8 *& buf, std::size_t & size, void * b, bool direction)
         {
             std::size_t s = 0;
+            void *& src = direction ? b : (void*&)buf, *& dest = direction ? (void*&)buf : b;
             if (t.getDataPtr(b, s))
                 return saveBuf(src, dest, s, buf, size);
 
@@ -183,9 +185,9 @@ namespace Network::Servers::HTTP
         }
 
         template <typename T>
-        bool saveHeaderToBuffer(T & t, uint8 *& buf, std::size_t & size) { void * b = 0; return serializeHeaderToBuffer(t, buf, size, b, b, buf); }
+        bool saveHeaderToBuffer(T & t, uint8 *& buf, std::size_t & size) { void * b = 0; return serializeHeaderToBuffer(t, buf, size, b, true); }
         template <typename T>
-        bool loadHeaderFromBuffer(T & t, uint8 *& buf, std::size_t & size) { void * b = 0; return serializeHeaderToBuffer(t, buf, size, b, buf, b); }
+        bool loadHeaderFromBuffer(T & t, uint8 *& buf, std::size_t & size) { void * b = 0; return serializeHeaderToBuffer(t, buf, size, b, false); }
 
         template <std::size_t N>
         bool saveInVault(Container::TranscientVault<N> & buffer)
@@ -458,6 +460,11 @@ namespace Network::Servers::HTTP
         bool sendAnswer(T && clientAnswer, bool close = false) {
             if (!sendStatus(clientAnswer.getCode())) return false;
 
+            // We'll be loosing the URI content when we clear the recvBuffer for sending data back, so store the
+            // request URI on the stack for logging purpose below
+            char * URI = (char*)alloca(reqLine.URI.absolutePath.getLength());
+            memcpy(URI, reqLine.URI.absolutePath.getData(), reqLine.URI.absolutePath.getLength());
+
             recvBuffer.reset();
             if (!clientAnswer.sendHeaders(*this)) return false;
             auto && stream = clientAnswer.getInputStream(socket);
@@ -469,7 +476,7 @@ namespace Network::Servers::HTTP
                 {
                     if (!sendSize(answerLength))
                     {
-                        SLog(Level::Info, "Client %s [%.*s](%u): 523%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), answerLength, close ? " closed" : "");
+                        SLog(Level::Info, "Client %s [%.*s](%u): 523%s", socket.address, reqLine.URI.absolutePath.getLength(), URI, answerLength, close ? " closed" : "");
                         return false;
                     }
 
@@ -492,14 +499,14 @@ namespace Network::Servers::HTTP
 
                     if (!clientAnswer.sendContent(*this, answerLength))
                     {
-                        SLog(Level::Info, "Client %s [%.*s](%u): 524%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), 0, close ? " closed" : "");
+                        SLog(Level::Info, "Client %s [%.*s](%u): 524%s", socket.address, reqLine.URI.absolutePath.getLength(), URI, 0, close ? " closed" : "");
                         return false;
                     }
                 } else if (!stream.hasContent())
                 {
                     if (!sendSize(0))
                     {
-                        SLog(Level::Info, "Client %s [%.*s](%u): 525%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), answerLength, close ? " closed" : "");
+                        SLog(Level::Info, "Client %s [%.*s](%u): 525%s", socket.address, reqLine.URI.absolutePath.getLength(), URI, answerLength, close ? " closed" : "");
                         return false;
                     }
                 }
@@ -507,12 +514,12 @@ namespace Network::Servers::HTTP
             {
                 if (!sendSize(0))
                 {
-                    SLog(Level::Info, "Client %s [%.*s](%u): 525%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), answerLength, close ? " closed" : "");
+                    SLog(Level::Info, "Client %s [%.*s](%u): 525%s", socket.address, reqLine.URI.absolutePath.getLength(), URI, answerLength, close ? " closed" : "");
                     return false;
                 }
             }
 
-            SLog(Level::Info, "Client %s [%.*s](%u): %d%s", socket.address, reqLine.URI.absolutePath.getLength(), reqLine.URI.absolutePath.getData(), answerLength, (int)clientAnswer.getCode(), close ? " closed" : "");
+            SLog(Level::Info, "Client %s [%.*s](%u): %d%s", socket.address, reqLine.URI.absolutePath.getLength(), URI, answerLength, (int)clientAnswer.getCode(), close ? " closed" : "");
             parsingStatus = ReqDone;
             if (close) reset();
             return true;
@@ -589,35 +596,47 @@ namespace Network::Servers::HTTP
             auto length = headers.template getHeader<Headers::ContentLength>();
             size_t expLength = length.getValueElement(0);
 
-            if (recvBuffer.maxSize() < expLength)
-            {   // TODO: Incremental parsing to only extract the keys we are interested in
-                // Right now, it's not possible to store the content in the receiving buffer
-                return false;
-            }
-            if (recvBuffer.getSize() < expLength)
-            {
-                // Need to fetch the missing content
-                Error ret = socket.recv((char*)recvBuffer.getTail(), 0, expLength - recvBuffer.getSize());
-                if (ret.isError()) return false;
-                recvBuffer.stored(ret.getCount());
-            }
-
-            // Then parse it
             auto type = headers.template getHeader<Headers::ContentType>();
-            if constexpr(requires{ typename T::IsAFormPost; })
+            switch(type.getValueElement(0))
             {
-                if (type.getValueElement(0) == MIMEType::application_xWwwFormUrlencoded)
-                {
-                    ROString input = recvBuffer.getView<ROString>();
-                    content.parse(input);
-                    return true;
+                case MIMEType::multipart_formData:
+                {   // TODO: Support multipart encoding
+                    return false;
                 }
+                case MIMEType::application_xWwwFormUrlencoded:
+                    if constexpr(requires{ typename T::IsAFormPost; })
+                    {
+                        if (recvBuffer.maxSize() < expLength)
+                            // Request is too big for us to parse, so let's bail out
+                            return false;
 
-                // Not supported yet
-                return false;
-            } else {
-                // Multipart not supported yet
-                return false;
+                        if (recvBuffer.getSize() < expLength)
+                        {
+                            // Need to fetch the missing content
+                            Error ret = socket.recv((char*)recvBuffer.getTail(), expLength - recvBuffer.getSize());
+                            if (ret.isError()) return false;
+                            recvBuffer.stored(ret.getCount());
+                        }
+
+                        ROString input = recvBuffer.getView<ROString>();
+                        content.parse(input);
+                        return true;
+                    } else return false; // You need to use a FormPost class here to get the posted form
+                default:
+                    if constexpr(requires{ content.write((char*)0, 0); })
+                    {
+                        // Save what we've already received
+                        std::size_t len = content.write(recvBuffer.getHead(), recvBuffer.getSize());
+                        if (len != recvBuffer.getSize()) return false;
+                        recvBuffer.resetTranscient(0);
+
+                        Streams::Socket in(socket);
+                        expLength -= len;
+                        len = Streams::copy(in, content, recvBuffer.getTail(), recvBuffer.freeSize(), expLength);
+                        return len == expLength;
+                    }
+                    else
+                        return false;
             }
         }
 
@@ -764,6 +783,60 @@ namespace Network::Servers::HTTP
         CodeAnswer(Code code) : CodeAnswer::ClientAnswer(code) {}
     };
 
+
+    /** A JSON escaping dynamic function wrapper. This is used to escape strings so they can respect the JSON format */
+    static size_t computeJSONStringRequiredSize(const ROString & input)
+    {
+        // First pass, count the number of required output char
+        size_t count = 0; const char * p = input.getData();
+        for (size_t i = 0; i < input.getLength(); i++) {
+            switch (p[i]) {
+            case '"': count += 2; break;
+            case '\\': count += 2; break;
+            case '\b': count += 2; break;
+            case '\f': count += 2; break;
+            case '\n': count += 2; break;
+            case '\r': count += 2; break;
+            case '\t': count += 2; break;
+            default:
+                if ((uint8)p[i] <= '\x1f') {
+                    count += 6;
+                } else {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    static RWString escapeJSONString(const ROString & input)
+    {
+        size_t count = computeJSONStringRequiredSize(input);
+        RWString ret(0, count);
+        char * o = (char*)ret.getData();
+        static char hexDigits[] = "0123456789abcdef";
+        const char * p = input.getData();
+        for (size_t i = 0; i < input.getLength(); i++) {
+            switch (p[i]) {
+            case '"': *o++ = '\\'; *o++ = '"';   break;
+            case '\\': *o++ = '\\'; *o++ = '\\'; break;
+            case '\b': *o++ = '\\'; *o++ = 'b'; break;
+            case '\f': *o++ = '\\'; *o++ = 'f'; break;
+            case '\n': *o++ = '\\'; *o++ = 'n'; break;
+            case '\r': *o++ = '\\'; *o++ = 'r'; break;
+            case '\t': *o++ = '\\'; *o++ = 't'; break;
+            default:
+                if ((uint8)p[i] <= '\x1f') {
+                    *o++ = '\\'; *o++ = 'u'; *o++ = '0'; *o++ = '0';
+                    *o++ = hexDigits[p[i] >> 4]; *o++ = hexDigits[p[i] & 0xF];
+                } else {
+                    *o++ = p[i];
+                }
+            }
+        }
+        *o = 0;
+        return ret;
+    }
 
 
     /** The get a chunk function that should follow this signature:

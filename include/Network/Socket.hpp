@@ -92,7 +92,7 @@ namespace Network {
             return Success;
         }
 
-        Virtual Error recv(char * buffer, const uint32 minLength, const uint32 maxLength = 0)
+        Virtual Error recv(char * buffer, const uint32 maxLength = 0, const uint32 minLength = 0)
         {
             int ret = 0;
             if (minLength) {
@@ -136,6 +136,7 @@ namespace Network {
         Virtual ~BaseSocket() { ::closesocket(socket); socket = -1; }
     };
 
+#undef Virtual
 
 #if UseTLS == 1
     class MBTLSSocket : public BaseSocket
@@ -341,10 +342,13 @@ namespace Network {
         /** This is only used with SSL socket to avoid RTTI */
         int getType() const { return 1; }
 
-        Virtual void reset() { mbedtls_net_free(&net); }
+        void reset() { mbedtls_net_free(&net); }
     };
 #endif
 
+    /** A socket pool used to select multiple socket at once.
+        The order of the sockets in the pool isn't preserved upon removing sockets (removing is done with swapping with the last used element in the array).
+        Appending sockets are always done to the end of the pool.  */
     template <std::size_t N>
     struct SocketPool
     {
@@ -366,9 +370,9 @@ namespace Network {
             {
                 if (sockets[i] == &socket) {
                     std::size_t u = used - 1;
-                    sockets[i] = sockets[u];
+                    sockets[i] = sockets[u]; // Swap with last
                     if (selectMask & (1<<u))
-                        // Move the select status too
+                        // Swap the select status too
                         selectMask ^= (1<<u) | ((selectMask & (1<<i)) ? 0 : (1<<i));
                     sockets[u] = 0;
                     --used;
