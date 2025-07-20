@@ -4,12 +4,12 @@
 // We need header map, ParsingError and persistence interface
 #include "HeaderMap.hpp"
 // We need concepts too
-#include "../../Concepts.hpp"
+#include "Concepts.hpp"
 
 
 #if defined(MaxSupport)
   // We need path normalization
-  #include "../../Path/Normalization.hpp"
+  #include "Path/Normalization.hpp"
 #endif
 
 // The REQUEST line is defined in section 5.1 in RFC2616

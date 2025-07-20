@@ -1,15 +1,16 @@
 #ifndef hpp_HeaderMap_hpp
 #define hpp_HeaderMap_hpp
 
+#include <initializer_list>
+
 // We need a string-view like class for avoiding useless copy here
-#include "../../Strings/ROString.hpp"
+#include "Strings/ROString.hpp"
 // We need intToStr method too
-#include "../../Strings/RWString.hpp"
+#include "Strings/RWString.hpp"
 // We need methods too
 #include "Methods.hpp"
 // We need TmpString too to persist string and other dynamically sized content to a client's receive buffer
-#include "../../Container/TmpString.hpp"
-#include <initializer_list>
+#include "Container/TmpString.hpp"
 
 namespace Protocol::HTTP
 {

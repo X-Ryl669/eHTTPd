@@ -2,7 +2,7 @@
 #define hpp_RingBuffer_hpp
 
 // We need types
-#include "../Types.hpp"
+#include "Types.hpp"
 
 namespace Container
 {

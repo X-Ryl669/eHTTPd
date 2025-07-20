@@ -2,7 +2,7 @@
 #define hpp_InternalErrors_hpp
 
 // We need types
-#include "../Types.hpp"
+#include "Types.hpp"
 
 namespace Network
 {

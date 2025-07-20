@@ -5,16 +5,16 @@
 // We need HTTP parsers here
 #include "Parser.hpp"
 // We need the socket code too for clients and server
-#include "../Socket.hpp"
+#include "Network/Socket.hpp"
 // We need intToStr
-#include "../../Strings/RWString.hpp"
+#include "Strings/RWString.hpp"
 // We need error code too
-#include "../../Protocol/HTTP/Codes.hpp"
+#include "Protocol/HTTP/Codes.hpp"
 // We need compile time vectors here to cast some magical spells on types
-#include "../../Container/CTVector.hpp"
-#include "../../Container/RingBuffer.hpp"
+#include "Container/CTVector.hpp"
+#include "Container/RingBuffer.hpp"
 // We need streams too
-#include "../../Streams/Streams.hpp"
+#include "Streams/Streams.hpp"
 
 #include <type_traits>
 // We need offsetof for making the container_of macro
@@ -44,7 +44,8 @@ namespace Network::Servers::HTTP
     static constexpr const char EntityTooLargeAnswer[] = "HTTP/1.1 413 Entity too large\r\n\r\n";
     static constexpr const char InternalServerErrorAnswer[] = "HTTP/1.1 500 Internal server error\r\n\r\n";
     static constexpr const char NotFoundAnswer[] = "HTTP/1.1 404 Not found\r\n\r\n";
-    static constexpr const char ChunkedEncoding[] = "Transfer-Encoding: chunked";
+    static constexpr const char ChunkedEncoding[] = "Transfer-Encoding:chunked\r\n";
+    static constexpr const char ConnectionClose[] = "Connection:close\r\n";
 
     using namespace Protocol::HTTP;
 
@@ -274,6 +275,22 @@ namespace Network::Servers::HTTP
             }
         }
 
+        template <Headers h, typename Value>
+        bool setHeaderIfUnset(Value && v) const
+        {
+            constexpr std::size_t pos = findHeaderPos(h);
+            if constexpr (pos != headerArray.size())
+            {
+                if (auto & header = std::get<pos>(headers); header.isSet())
+                {
+                    header.setValue(std::forward(v));
+                    return true;
+                }
+            } 
+            return false;
+        }
+
+
         bool sendHeaders(Container::TrackedBuffer & buffer)
         {
             return [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
@@ -285,14 +302,14 @@ namespace Network::Servers::HTTP
     /** Convert the list of headers you're expecting to the matching HeadersArray the library is using */
     template <Headers ... allowedHeaders>
     struct ToHeaderArray {
-        static constexpr auto headersArray = Container::getUnique<std::array{allowedHeaders...}, std::array{Headers::Authorization}>();
+        static constexpr auto headersArray = Container::getUnique<std::array{allowedHeaders...}, std::array{Headers::Authorization, Headers::Connection}>();
         typedef HeadersArray<headersArray, decltype(Container::makeTypes<Details::MakeRequest, headersArray>())> Type;
     };
 
     /** Convert the list of headers you're expecting to the matching HeadersArray the library is using */
     template <Headers ... allowedHeaders>
     struct ToPostHeaderArray {
-        static constexpr auto headersArray = Container::getUnique<std::array{allowedHeaders...}, std::array{Headers::ContentType, Headers::ContentLength}>();
+        static constexpr auto headersArray = Container::getUnique<std::array{allowedHeaders...}, std::array{Headers::ContentType, Headers::ContentLength, Headers::Connection}>();
         typedef HeadersArray<headersArray, decltype(Container::makeTypes<Details::MakeRequest, headersArray>())> Type;
     };
 
@@ -466,6 +483,10 @@ namespace Network::Servers::HTTP
             memcpy(URI, reqLine.URI.absolutePath.getData(), reqLine.URI.absolutePath.getLength());
 
             recvBuffer.reset();
+            // Force closing the connection, we don't support Keep-Alive connections by default TODO
+            if (!clientAnswer.template hasValidHeader<Headers::Connection>())
+                socket.send(ConnectionClose, sizeof(ConnectionClose) - 1);
+
             if (!clientAnswer.sendHeaders(*this)) return false;
             auto && stream = clientAnswer.getInputStream(socket);
             std::size_t answerLength = 0;
@@ -494,7 +515,6 @@ namespace Network::Servers::HTTP
                     if (!clientAnswer.template hasValidHeader<Headers::TransferEncoding>()) {
                         // Need to send a transfer encoding header if we don't have a size for the content and it's not done by the client's answer by itself
                         socket.send(ChunkedEncoding, sizeof(ChunkedEncoding) - 1);
-                        socket.send(EOM, strlen(EOM));
                     }
 
                     if (!clientAnswer.sendContent(*this, answerLength))
@@ -539,7 +559,7 @@ namespace Network::Servers::HTTP
         }
         bool sendSize(std::size_t length)
         {
-            static char hdr[] = { ':' };
+            static const char hdr[] = { ':' };
             char buffer[sizeof("18446744073709551615")] = { };
             socket.send(Refl::toString(Headers::ContentLength), strlen(Refl::toString(Headers::ContentLength)));
             socket.send(hdr, 1);
@@ -744,6 +764,9 @@ namespace Network::Servers::HTTP
         }
         void setCode(Code code) { this->replyCode = code; }
         Code getCode() const { return this->replyCode; }
+
+        template <Headers h, typename Value>
+        void setHeaderIfUnset(Value && v) { headers.template setHeaderIfUnset<h>(std::forward<Value>(v)); }
         template <Headers h, typename Value>
         void setHeader(Value && v) { headers.template getHeader<h>().setValue(std::forward<Value>(v)); }
         template <Headers h>
@@ -904,6 +927,8 @@ namespace Network::Servers::HTTP
             o.write(nullptr, 0);
             return true;
         }
+        template <Headers h, typename Value>
+        void setHeaderIfUnset(Value && v) { headers.template setHeaderIfUnset<h>(std::forward<Value>(v)); }
         template <Headers h, typename Value>
         void setHeader(Value && v) { headers.template setHeader<h>(std::forward<Value>(v)); }
         template <Headers h>

@@ -2,7 +2,7 @@
 #define hpp_TmpString_hpp
 
 // We need read-only strings
-#include "../Strings/ROString.hpp"
+#include "Strings/ROString.hpp"
 // We need the ring buffer declaration too
 #include "RingBuffer.hpp"
 

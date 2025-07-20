@@ -2,16 +2,16 @@
 #define hpp_Streams_hpp
 
 // We need types
-#include "../Types.hpp"
+#include "Types.hpp"
 // We need FILE declaration and its functions
 #include <bits/c++config.h>
 #include <cstdio>
 // We need ROString for memory view buffer
-#include "../Strings/ROString.hpp"
+#include "Strings/ROString.hpp"
 // We need int2Str function too
-#include "../Strings/RWString.hpp"
+#include "Strings/RWString.hpp"
 // We need socket code too
-#include "../Network/Socket.hpp"
+#include "Network/Socket.hpp"
 
 /** This is where streams are declared */
 namespace Streams

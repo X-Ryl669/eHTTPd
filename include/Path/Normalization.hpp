@@ -2,7 +2,7 @@
 #define hpp_Normalization_hpp
 
 // We need Read only strings
-#include "../Strings/ROString.hpp"
+#include "Strings/ROString.hpp"
 
 namespace Path
 {

@@ -3,11 +3,11 @@
 
 
 // We need reflection code for enum to string conversion
-#include "../../Reflection/AutoEnum.hpp"
+#include "Reflection/AutoEnum.hpp"
 // We need a string-view like class for avoiding useless copy here
-#include "../../Strings/ROString.hpp"
+#include "Strings/ROString.hpp"
 // We need compile time string to produce the expected header name
-#include "../../Strings/CTString.hpp"
+#include "Strings/CTString.hpp"
 
 namespace Protocol::HTTP
 {
