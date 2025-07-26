@@ -105,22 +105,32 @@ auto CatchAll = [](Client & client, const auto & headers)
     buffer[cwdLen + path.getLength()] = 0;
 
     // Ok, make an FileAnswer that'll copy the file content to the send buffer repeatedly until done.
-    // You might prefer to use memory mapping here, which is also possible, with a Stream::MemoryMap instead
+    // You might prefer to use memory mapping here, which is also possible, with a Stream::MemoryView instead
     // This server doesn't use linux's sendfile syscall, it's too specific to Linux.
     FileAnswer<Streams::FileInput> answer(buffer);
+//    FileAnswer<Streams::MemoryView, Headers::ContentEncoding> answer((const char*)buffer, ROString("This is it"));
+//    answer.setHeader<Headers::ContentEncoding>(Encoding::identity);
     return client.sendAnswer(answer, true);
 };
 
 
-
+#define UseMultiRoute
 
 int main()
 {
     // Declare your router with all the static routes
     constexpr Router<
+#ifndef UseMultiRoute
         Route<Color, MethodsMask{ Method::GET, Method::POST }, "/Color", Headers::ContentLength, Headers::Date, Headers::ContentDisposition>{},
         Route<LongAnswer, Method::GET, "/long", Headers::Date, Headers::AcceptLanguage >{},
         Route<PostFile, Method::POST, "/postFile", Headers::ContentType >{},
+#else
+        SimilarRoutes<MethodsMask{ Method::GET, Method::POST },
+                      MultiRoute<SubRoute<Color, "/Color"_hash>{},
+                                 SubRoute<LongAnswer, "/long"_hash>{},
+                                 SubRoute<PostFile, "/postFile"_hash>{}>{},
+                      Headers::ContentType, Headers::Date, Headers::AcceptLanguage>{},
+#endif
         DefaultRoute<CatchAll, Method::GET, Headers::Date >{}
     > router;
 

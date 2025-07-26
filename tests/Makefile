@@ -15,3 +15,9 @@ ROString.o: ../src/ROString.cpp ../include/Strings/ROString.hpp
 
 Normalization.o: ../src/Normalization.cpp ../include/Path/Normalization.hpp ROString.o
 	g++ -std=c++20 -I ../include -I ../include/Strings -g -O0 -c $< -o $@
+
+min:
+	g++ -std=c++20 -I ../include -I ../include/Strings -Os -ffunction-sections -fdata-sections -c ../src/Normalization.cpp -o Normalization_s.o
+	g++ -std=c++20 -I ../include -I ../include/Strings -Os -ffunction-sections -fdata-sections -c ../src/ROString.cpp -o ROString_s.o
+	g++ -std=c++20 -I ../include -I ../include/Strings -Os -ffunction-sections -fdata-sections RouteTesting.cpp Normalization_s.o ROString_s.o -Wl,--gc-sections -s -o RouteTesting_s
+
