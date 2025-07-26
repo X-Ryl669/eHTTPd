@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <style>
+main {
+  margin: 50px auto;
+  text-align: center;
+}
+
+#file {
+  display: none;
+}
+
+label[for="file"] {
+  background-color: lightgrey;
+  padding: 10px 10px;
+}
+
+progress {
+  display: none;
+}
+
+progress.visible {
+  display: inline;
+}
+        </style>
+    </head>
+<body>
+
+    <main>
+      <h1>Upload a file</h1>
+      <p>
+        <label for="file">File to upload</label><input type="file" id="file" />
+      </p>
+      <p>
+        <progress></progress>
+      </p>
+      <p>
+        <output></output>
+      </p>
+      <p>
+        <button disabled id="abort">Abort</button>
+      </p>
+    </main>
+<script>
+  const ajax = (url, callback, error, options) => {
+    let xhr = new XMLHttpRequest();
+    options = options || {};
+    error = error || (() => {});
+    xhr.onreadystatechange = () => {
+        if (xhr.readyState == 4) {
+            if (xhr.status == 200)
+                callback(xhr.responseText);
+            else error(xhr.responseText);
+        }
+    }
+    if (options.upload && typeof xhr.upload.onprogress != 'undefined') xhr.upload.onprogress = options.upload;
+    xhr.ontimeout = xhr.onerror = (e) => { error(e); }
+    let method = options.method || "GET";
+    xhr.open(method, url, true);
+    xhr.timeout = options.timeout || 0;
+    if (method == "POST" && !options.upload) xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+    xhr.send(options.formData || null);
+  }
+
+  const fileInput = document.getElementById("file");
+  const progressBar = document.querySelector("progress");
+  const log = document.querySelector("output");
+  const abortButton = document.getElementById("abort");
+
+  fileInput.addEventListener('change', (e) => {
+    ajax('/postFile',
+       (event) => {
+          progressBar.classList.remove("visible");
+          if (event.loaded !== 0)
+            log.textContent = "Upload finished.";
+          abortButton.disabled = true; },
+        (event) => {
+          progressBar.classList.remove("visible");
+          log.textContent = `Upload failed: ${event.type}`;},
+        {
+            timeout: 30000,
+            method: "POST", formData: fileInput.files[0], upload: (event) => {
+                progressBar.value = event.loaded;
+                log.textContent = `Uploading (${(
+                    (event.loaded / event.total) *
+                    100
+                ).toFixed(2)}%)…`;}
+        });
+  });
+
+
+</script>
+</body>
+</html>
