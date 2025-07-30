@@ -2,7 +2,7 @@
 #define hpp_HTTP_Parser_hpp
 
 // We need methods and request line parsing
-#include "../../Protocol/HTTP/RequestLine.hpp"
+#include "Protocol/HTTP/RequestLine.hpp"
 
 namespace Network::Servers::HTTP
 {

@@ -1,6 +1,8 @@
 #ifndef hpp_HTTP_Methods_hpp
 #define hpp_HTTP_Methods_hpp
 
+// We need our configuration
+#include "HTTPDConfig.hpp"
 // We need reflection code for enum to string conversion
 #include "Reflection/AutoEnum.hpp"
 // We need a string-view like class for avoiding useless copy here
@@ -15,7 +17,6 @@
 #define IF_1(true_case, false_case) true_case,
 #define IF(condition, true_case, false_case) CONCAT2_DEFERRED(IF_, condition)(true_case, false_case)
 
-#define MaxSupport 1
 
 namespace Protocol::HTTP
 {
@@ -123,6 +124,7 @@ namespace Protocol::HTTP
         UserAgent,
         IF(MaxSupport, Via, )
         WWWAuthenticate,
+        IF(MaxSupport, XClientDate, )
         IF(MaxSupport, XForwardedFor, )
     };
 
@@ -164,6 +166,7 @@ namespace Protocol::HTTP
         Upgrade = (int8)Headers::Upgrade,
         UserAgent = (int8)Headers::UserAgent,
         IF(MaxSupport, Via = (int8)Headers::Via, )
+        IF(MaxSupport, XClientDate, )
         IF(MaxSupport, XForwardedFor = (int8)Headers::XForwardedFor, )
     };
 
@@ -435,7 +438,7 @@ namespace Protocol::HTTP
     /////////////////////////////////////////////////////////////////////////////////////////////////////
 
     /** Accept-Charset header values. This MUST be sorted (except for Invalid and all) */
-    enum class Charset : char
+    enum class Charset : int8
     {
         Invalid      = -1,
         ISO_8859_1,
@@ -481,7 +484,7 @@ namespace Protocol::HTTP
     /////////////////////////////////////////////////////////////////////////////////////////////////////
 
     /** Accept-Encoding / Content-Encoding headers. This MUST be sorted (except for Invalid and all) */
-    enum class Encoding : char
+    enum class Encoding : int8
     {
         Invalid = -1,
         all,

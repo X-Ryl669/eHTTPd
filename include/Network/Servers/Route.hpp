@@ -3,7 +3,13 @@
 
 // We need Client declaration
 #include "HTTP.hpp"
+#include "Tools/FuncRef.hpp"
 
+// We need offsetof for making the container_of macro
+#include <cstddef>
+
+#define container_of(pointer, type, member)                                                        \
+  (reinterpret_cast<type*>((reinterpret_cast<char*>(pointer) - offsetof(type, member))))
 
 namespace Network::Servers::HTTP
 {
@@ -25,13 +31,13 @@ namespace Network::Servers::HTTP
         // Make sure the signature matches (try with the largest possible header array here)
         f(c, HeadersArray<std::array{
 #ifdef MaxSupport
-                Headers::Accept, Headers::AcceptCharset, Headers::AcceptDatetime, Headers::AcceptEncoding, Headers::AcceptLanguage, Headers::AcceptPatch, Headers::AcceptRanges, Headers::AccessControlAllowCredentials, Headers::AccessControlAllowHeaders, Headers::AccessControlAllowMethods, Headers::AccessControlAllowOrigin, Headers::AccessControlExposeHeaders, Headers::AccessControlMaxAge, Headers::AccessControlRequestMethod, Headers::Allow, Headers::Authorization, Headers::CacheControl, Headers::Connection, Headers::ContentDisposition, Headers::ContentEncoding, Headers::ContentLanguage, Headers::ContentLength, Headers::ContentLocation, Headers::ContentRange, Headers::ContentType, Headers::Cookie, Headers::Date, Headers::ETag, Headers::Expect, Headers::Expires, Headers::Forwarded, Headers::From, Headers::Host, Headers::IfMatch, Headers::IfModifiedSince, Headers::IfNoneMatch, Headers::IfRange, Headers::IfUnmodifiedSince, Headers::LastModified, Headers::Link, Headers::Location, Headers::MaxForwards, Headers::Origin, Headers::Pragma, Headers::Prefer, Headers::ProxyAuthorization, Headers::Range, Headers::Referer, Headers::Server, Headers::SetCookie, Headers::StrictTransportSecurity, Headers::TE, Headers::Trailer, Headers::TransferEncoding, Headers::Upgrade, Headers::UserAgent, Headers::Via, Headers::WWWAuthenticate, Headers::XForwardedFor
+                Headers::Accept, Headers::AcceptCharset, Headers::AcceptDatetime, Headers::AcceptEncoding, Headers::AcceptLanguage, Headers::AcceptPatch, Headers::AcceptRanges, Headers::AccessControlAllowCredentials, Headers::AccessControlAllowHeaders, Headers::AccessControlAllowMethods, Headers::AccessControlAllowOrigin, Headers::AccessControlExposeHeaders, Headers::AccessControlMaxAge, Headers::AccessControlRequestMethod, Headers::Allow, Headers::Authorization, Headers::CacheControl, Headers::Connection, Headers::ContentDisposition, Headers::ContentEncoding, Headers::ContentLanguage, Headers::ContentLength, Headers::ContentLocation, Headers::ContentRange, Headers::ContentType, Headers::Cookie, Headers::Date, Headers::ETag, Headers::Expect, Headers::Expires, Headers::Forwarded, Headers::From, Headers::Host, Headers::IfMatch, Headers::IfModifiedSince, Headers::IfNoneMatch, Headers::IfRange, Headers::IfUnmodifiedSince, Headers::LastModified, Headers::Link, Headers::Location, Headers::MaxForwards, Headers::Origin, Headers::Pragma, Headers::Prefer, Headers::ProxyAuthorization, Headers::Range, Headers::Referer, Headers::Server, Headers::SetCookie, Headers::StrictTransportSecurity, Headers::TE, Headers::Trailer, Headers::TransferEncoding, Headers::Upgrade, Headers::UserAgent, Headers::Via, Headers::WWWAuthenticate, Headers::XClientDate, Headers::XForwardedFor
 #else
                 Headers::Accept, Headers::AcceptEncoding, Headers::AcceptLanguage, Headers::AcceptRanges, Headers::AccessControlAllowOrigin, Headers::Authorization, Headers::CacheControl, Headers::Connection, Headers::ContentDisposition, Headers::ContentEncoding, Headers::ContentLanguage, Headers::ContentLength, Headers::ContentRange, Headers::ContentType, Headers::Cookie, Headers::Date, Headers::Expires, Headers::Host, Headers::LastModified, Headers::Location, Headers::Origin, Headers::Pragma, Headers::Range, Headers::Referer, Headers::Server, Headers::SetCookie, Headers::TE, Headers::TransferEncoding, Headers::Upgrade, Headers::UserAgent, Headers::WWWAuthenticate
 #endif
             }, Container::TypeList<
 #ifdef MaxSupport
-                RequestHeader<Headers::Accept>, RequestHeader<Headers::AcceptCharset>, RequestHeader<Headers::AcceptDatetime>, RequestHeader<Headers::AcceptEncoding>, RequestHeader<Headers::AcceptLanguage>, RequestHeader<Headers::AcceptPatch>, RequestHeader<Headers::AcceptRanges>, RequestHeader<Headers::AccessControlAllowCredentials>, RequestHeader<Headers::AccessControlAllowHeaders>, RequestHeader<Headers::AccessControlAllowMethods>, RequestHeader<Headers::AccessControlAllowOrigin>, RequestHeader<Headers::AccessControlExposeHeaders>, RequestHeader<Headers::AccessControlMaxAge>, RequestHeader<Headers::AccessControlRequestMethod>, RequestHeader<Headers::Allow>, RequestHeader<Headers::Authorization>, RequestHeader<Headers::CacheControl>, RequestHeader<Headers::Connection>, RequestHeader<Headers::ContentDisposition>, RequestHeader<Headers::ContentEncoding>, RequestHeader<Headers::ContentLanguage>, RequestHeader<Headers::ContentLength>, RequestHeader<Headers::ContentLocation>, RequestHeader<Headers::ContentRange>, RequestHeader<Headers::ContentType>, RequestHeader<Headers::Cookie>, RequestHeader<Headers::Date>, RequestHeader<Headers::ETag>, RequestHeader<Headers::Expect>, RequestHeader<Headers::Expires>, RequestHeader<Headers::Forwarded>, RequestHeader<Headers::From>, RequestHeader<Headers::Host>, RequestHeader<Headers::IfMatch>, RequestHeader<Headers::IfModifiedSince>, RequestHeader<Headers::IfNoneMatch>, RequestHeader<Headers::IfRange>, RequestHeader<Headers::IfUnmodifiedSince>, RequestHeader<Headers::LastModified>, RequestHeader<Headers::Link>, RequestHeader<Headers::Location>, RequestHeader<Headers::MaxForwards>, RequestHeader<Headers::Origin>, RequestHeader<Headers::Pragma>, RequestHeader<Headers::Prefer>, RequestHeader<Headers::ProxyAuthorization>, RequestHeader<Headers::Range>, RequestHeader<Headers::Referer>, RequestHeader<Headers::Server>, RequestHeader<Headers::SetCookie>, RequestHeader<Headers::StrictTransportSecurity>, RequestHeader<Headers::TE>, RequestHeader<Headers::Trailer>, RequestHeader<Headers::TransferEncoding>, RequestHeader<Headers::Upgrade>, RequestHeader<Headers::UserAgent>, RequestHeader<Headers::Via>, RequestHeader<Headers::WWWAuthenticate>, RequestHeader<Headers::XForwardedFor>
+                RequestHeader<Headers::Accept>, RequestHeader<Headers::AcceptCharset>, RequestHeader<Headers::AcceptDatetime>, RequestHeader<Headers::AcceptEncoding>, RequestHeader<Headers::AcceptLanguage>, RequestHeader<Headers::AcceptPatch>, RequestHeader<Headers::AcceptRanges>, RequestHeader<Headers::AccessControlAllowCredentials>, RequestHeader<Headers::AccessControlAllowHeaders>, RequestHeader<Headers::AccessControlAllowMethods>, RequestHeader<Headers::AccessControlAllowOrigin>, RequestHeader<Headers::AccessControlExposeHeaders>, RequestHeader<Headers::AccessControlMaxAge>, RequestHeader<Headers::AccessControlRequestMethod>, RequestHeader<Headers::Allow>, RequestHeader<Headers::Authorization>, RequestHeader<Headers::CacheControl>, RequestHeader<Headers::Connection>, RequestHeader<Headers::ContentDisposition>, RequestHeader<Headers::ContentEncoding>, RequestHeader<Headers::ContentLanguage>, RequestHeader<Headers::ContentLength>, RequestHeader<Headers::ContentLocation>, RequestHeader<Headers::ContentRange>, RequestHeader<Headers::ContentType>, RequestHeader<Headers::Cookie>, RequestHeader<Headers::Date>, RequestHeader<Headers::ETag>, RequestHeader<Headers::Expect>, RequestHeader<Headers::Expires>, RequestHeader<Headers::Forwarded>, RequestHeader<Headers::From>, RequestHeader<Headers::Host>, RequestHeader<Headers::IfMatch>, RequestHeader<Headers::IfModifiedSince>, RequestHeader<Headers::IfNoneMatch>, RequestHeader<Headers::IfRange>, RequestHeader<Headers::IfUnmodifiedSince>, RequestHeader<Headers::LastModified>, RequestHeader<Headers::Link>, RequestHeader<Headers::Location>, RequestHeader<Headers::MaxForwards>, RequestHeader<Headers::Origin>, RequestHeader<Headers::Pragma>, RequestHeader<Headers::Prefer>, RequestHeader<Headers::ProxyAuthorization>, RequestHeader<Headers::Range>, RequestHeader<Headers::Referer>, RequestHeader<Headers::Server>, RequestHeader<Headers::SetCookie>, RequestHeader<Headers::StrictTransportSecurity>, RequestHeader<Headers::TE>, RequestHeader<Headers::Trailer>, RequestHeader<Headers::TransferEncoding>, RequestHeader<Headers::Upgrade>, RequestHeader<Headers::UserAgent>, RequestHeader<Headers::Via>, RequestHeader<Headers::WWWAuthenticate>, RequestHeader<Headers::XClientDate>, RequestHeader<Headers::XForwardedFor>
 #else
                 RequestHeader<Headers::Accept>, RequestHeader<Headers::AcceptEncoding>, RequestHeader<Headers::AcceptLanguage>, RequestHeader<Headers::AcceptRanges>, RequestHeader<Headers::AccessControlAllowOrigin>, RequestHeader<Headers::Authorization>, RequestHeader<Headers::CacheControl>, RequestHeader<Headers::Connection>, RequestHeader<Headers::ContentDisposition>, RequestHeader<Headers::ContentEncoding>, RequestHeader<Headers::ContentLanguage>, RequestHeader<Headers::ContentLength>, RequestHeader<Headers::ContentRange>, RequestHeader<Headers::ContentType>, RequestHeader<Headers::Cookie>, RequestHeader<Headers::Date>, RequestHeader<Headers::Expires>, RequestHeader<Headers::Host>, RequestHeader<Headers::LastModified>, RequestHeader<Headers::Location>, RequestHeader<Headers::Origin>, RequestHeader<Headers::Pragma>, RequestHeader<Headers::Range>, RequestHeader<Headers::Referer>, RequestHeader<Headers::Server>, RequestHeader<Headers::SetCookie>, RequestHeader<Headers::TE>, RequestHeader<Headers::TransferEncoding>, RequestHeader<Headers::Upgrade>, RequestHeader<Headers::UserAgent>, RequestHeader<Headers::WWWAuthenticate>
 #endif
@@ -60,8 +66,7 @@ namespace Network::Servers::HTTP
         static bool accept(Client & client, uint32 methodsMask) { return ((1<<(uint32)client.reqLine.method) & methodsMask); }
 
         /** A generic header parser that's using the given lambda function for the specialized stuff (this limits the binary size) */
-        template <typename Func>
-        static ClientState parse(Client & client, Func && f)
+        static ClientState parse(Client & client, Tools::function_ref<Headers(const ROString & header, RequestHeaderBase *& reqHdr)> f)
         {
             // Parse the headers as much as we can
             ROString input = client.recvBuffer.getView<ROString>(), header;
@@ -106,8 +111,7 @@ namespace Network::Servers::HTTP
         }
 
         /** A generic header parser that's using the given lambda function for the specialized stuff (this limits the binary size) */
-        template <typename Func>
-        static ClientState parsePersist(Client & client, Func && f)
+        static ClientState parsePersist(Client & client, Tools::function_ref<Headers(const ROString & header, RequestHeaderBase *& reqHdr)> f)
         {
             // Parse the headers as much as we can
             ROString input = client.recvBuffer.getView<ROString>(), header;
@@ -214,7 +218,9 @@ namespace Network::Servers::HTTP
             return client.saveHeaders(headers);
         }
         if (state == ClientState::Processing)
-        {   // Ok, the header were accepted, let's start processing this route
+        {   // Ok, the headers were accepted, let's start processing this route
+            if (headers.template getHeader<Headers::Connection>().getValueElement(0) == Connection::close)
+                client.forceCloseConnection();
             return CallbackCRTP(client, headers) ? ClientState::Done : ClientState::Error;
         }
         return state;
@@ -311,6 +317,11 @@ namespace Network::Servers::HTTP
         /** The main server loop */
         Error loop(uint32 timeoutMs = 20)
         {
+            // Kill any lingering client if any
+            for (auto i = 0; i < MaxClientCount; i++)
+            {
+                if (clientsArray[i].tickTimeToLive()) pool.remove(clientsArray[i].socket);
+            }
             if (pool.selectActive(timeoutMs) == Success)
             {   // At least, one socket made progress, so deal with it
 
@@ -320,6 +331,7 @@ namespace Network::Servers::HTTP
                 {
                     // Got a client for a socket, so need to fill the client buffer and let it progress parsing
                     Client * client = container_of(socket, Client, socket);
+
                     // Check if we can fill the receive buffer first
                     uint32 availableLength = client->recvBuffer.freeSize();
                     if (!availableLength)
@@ -343,8 +355,10 @@ namespace Network::Servers::HTTP
                         {   // Yes we can, trigger the router with them
                             switch (Router.process(*client))
                             {
-                            case ClientState::Error: closeClient(client); break;
-                            case ClientState::Done:  closeClient(client); break;
+                            case ClientState::Error:
+                            case ClientState::Done:
+                                if (!client->timeToLive) { pool.remove(client->socket); }
+                            break;
                             // Don't remove the client from the pool in that case, let's simply continue later on
                             case ClientState::Processing: break;
                             case ClientState::NeedRefill: break;
@@ -364,6 +378,8 @@ namespace Network::Servers::HTTP
 
                             // Client was received, so let's add this to the loop
                             if (!pool.append(clientsArray[i].socket)) return AllocationFailure;
+
+                            clientsArray[i].accepted();
                             break;
                         }
 
@@ -383,7 +399,7 @@ namespace Network::Servers::HTTP
                 return ret;
 
             if (!pool.append(server)) return AllocationFailure;
-            SLog(Level::Info, "HTTP server listening on port %u", port);
+            SLog(Level::Info, "HTTP server listening on port %u", (unsigned)port);
             return Success;
         }
     };

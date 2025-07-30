@@ -73,7 +73,7 @@ auto LongAnswer = [](Client & client, const auto & headers)
     };
     // Another possibility to set the header
     // answer.template setHeader<Headers::ContentType>(MIMEType::text_plain);
-    return client.sendAnswer(answer, true);
+    return client.sendAnswer(answer);
 };
 
 // Example to receive a posted file from the client in a POST form
@@ -110,7 +110,7 @@ auto CatchAll = [](Client & client, const auto & headers)
     FileAnswer<Streams::FileInput> answer(buffer);
 //    FileAnswer<Streams::MemoryView, Headers::ContentEncoding> answer((const char*)buffer, ROString("This is it"));
 //    answer.setHeader<Headers::ContentEncoding>(Encoding::identity);
-    return client.sendAnswer(answer, true);
+    return client.sendAnswer(answer);
 };
 
 

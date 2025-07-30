@@ -1,6 +1,8 @@
 #ifndef hpp_RequestLine_hpp
 #define hpp_RequestLine_hpp
 
+// We need our configuration
+#include "HTTPDConfig.hpp"
 // We need header map, ParsingError and persistence interface
 #include "HeaderMap.hpp"
 // We need concepts too
@@ -249,13 +251,13 @@ namespace Protocol::HTTP
         }
 
         /** Get the number of element that were parsed (usually 1) */
-        std::size_t getValueElementsCount() {
+        std::size_t getValueElementsCount() const {
             if constexpr(requires{ parsed.count; }) {
                 return parsed.count;
             } else { return 1; }
         }
         /** Get the i-th element that was parsed */
-        auto getValueElement(std::size_t i) {
+        auto getValueElement(std::size_t i) const {
             if constexpr(requires{ parsed.count; }) {
                 if (i >= parsed.count)
                     // All enumeration used for headers are made to accept -1 as error
