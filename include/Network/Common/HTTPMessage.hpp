@@ -1,0 +1,64 @@
+#ifndef hpp_HTTPMessage_hpp
+#define hpp_HTTPMessage_hpp
+
+// We need headers array too
+#include "HeadersArray.hpp"
+// We need status code too
+#include "Protocol/HTTP/Codes.hpp"
+
+
+// Common code shared by HTTP server and client to avoid binary size deduplication
+namespace Network::Common::HTTP
+{
+    using namespace Protocol::HTTP;
+
+    /** A client answer structure.
+        This is a convenient, template type, made to build an answer for an HTTP request.
+        There are 3 different possible answer type supported by this library:
+        1. A DIY answer, where you take over the client's socket, and set whatever you want (likely breaking HTTP protocol) - Not recommended
+        2. A simple answer, with basic headers (like Content-Type) and a fixed string as output.
+        3. A more complex answer with basic headers and you want to have control over the output stream (in that case, you'll give an input stream to the library to consume)
+
+        It's templated over the list of headers you intend to use in the answer (it's a statically built for saving both binary space, memory and logic).
+        In all cases, Content-Length is commputed by the library. Transfer-Encoding can be set up by you or the library depending on the stream itself
+        @param getContentFunc   A content function that returns a stream that can be used by the client to send the answer. If not provided, defaults to a simple string
+        @param headersToSend    A list of headers you are expecting to answer */
+    template< typename Child, typename Socket, Headers ... headersToSend>
+    struct CommonHeader
+    {
+        // Construct the answer header array
+        typedef typename ToAnswerHeader<headersToSend...>::Type ExpectedHeaderArray;
+        ExpectedHeaderArray headers;
+        /** The reply status code to use */
+        Code                replyCode;
+
+
+        Child * c() { return static_cast<Child*>(this); }
+
+        auto getInputStream(Socket & socket) {
+            if constexpr (requires { typename Child::getInputStream ; })
+                return c()->getInputStream(socket);
+            else return nullptr;
+        }
+        void setCode(Code code) { this->replyCode = code; }
+        Code getCode() const { return this->replyCode; }
+
+        template <Headers h, typename Value>
+        void setHeaderIfUnset(Value && v) { headers.template setHeaderIfUnset<h>(std::forward<Value>(v)); }
+        template <Headers h, typename Value>
+        void setHeader(Value && v) { headers.template getHeader<h>().setValue(std::forward<Value>(v)); }
+        template <Headers h>
+        bool hasValidHeader() const { return headers.template hasValidHeader<h>(); }
+
+        bool sendHeaders(Socket & socket, Container::TrackedBuffer & buffer)
+        {
+            if (!headers.sendHeaders(buffer)) return false;
+            return socket.send(buffer.buffer, buffer.used) == buffer.used;
+        }
+
+        CommonHeader(Code code = Code::Invalid) : replyCode(code) {}
+    };
+}
+
+
+#endif

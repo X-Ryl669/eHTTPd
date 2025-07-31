@@ -1,13 +1,13 @@
 #ifndef hpp_HeadersArray_hpp
 #define hpp_HeadersArray_hpp
 
-// We need HTTP parsers here
-#include "Parser.hpp"
+// We need methods and request line parsing
+#include "Protocol/HTTP/RequestLine.hpp"
 // We need compile time vectors here to cast some magical spells on types
 #include "Container/CTVector.hpp"
 #include "Container/RingBuffer.hpp"
 
-namespace Network::Servers::HTTP
+namespace Network::Common::HTTP
 {
     using namespace Protocol::HTTP;
 

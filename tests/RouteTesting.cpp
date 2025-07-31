@@ -48,7 +48,6 @@ auto Color = [](Client & client, const auto & headers)
         return true;
     } else
     {
-        // reply method is a shortcut for SimpleAnswer<MIMEType::text_plain>
         client.reply(Code::Ok, "GET Color");
         return true;
     }

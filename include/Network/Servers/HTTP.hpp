@@ -3,7 +3,7 @@
 
 
 // We need headers array too
-#include "HeadersArray.hpp"
+#include "Network/Common/HTTPMessage.hpp"
 // We need the socket code too for clients and server
 #include "Network/Socket.hpp"
 // We need intToStr
@@ -27,6 +27,9 @@
 
 namespace Network::Servers::HTTP
 {
+    using namespace Protocol::HTTP;
+    using namespace Network::Common::HTTP;
+
 #if UseTLSServer == 1
     typedef MBTLSSocket Socket;
 #else
@@ -353,6 +356,8 @@ namespace Network::Servers::HTTP
         }
         /** Socket was accepted */
         void accepted() { timeToLive = 255; }
+        /** Socket was remotely closed */
+        void closed() { timeToLive = 0; reset(); }
 
 
     protected:
@@ -380,13 +385,8 @@ namespace Network::Servers::HTTP
         @param getContentFunc   A content function that returns a stream that can be used by the client to send the answer. If not provided, defaults to a simple string
         @param answerHeaders    A list of headers you are expecting to answer */
     template< typename Child, Headers ... answerHeaders>
-    struct ClientAnswer
+    struct ClientAnswer : public CommonHeader<ClientAnswer<Child, answerHeaders...>, Socket, answerHeaders...>
     {
-        // Construct the answer header array
-        typedef typename ToAnswerHeader<answerHeaders...>::Type ExpectedHeaderArray;
-        ExpectedHeaderArray headers;
-        /** The reply status code to use */
-        Code                replyCode;
         Child * c() { return static_cast<Child*>(this); }
 
         auto getInputStream(Socket & socket) {
@@ -394,21 +394,11 @@ namespace Network::Servers::HTTP
                 return c()->getInputStream(socket);
             else return nullptr;
         }
-        void setCode(Code code) { this->replyCode = code; }
-        Code getCode() const { return this->replyCode; }
-
-        template <Headers h, typename Value>
-        void setHeaderIfUnset(Value && v) { headers.template setHeaderIfUnset<h>(std::forward<Value>(v)); }
-        template <Headers h, typename Value>
-        void setHeader(Value && v) { headers.template getHeader<h>().setValue(std::forward<Value>(v)); }
-        template <Headers h>
-        bool hasValidHeader() const { return headers.template hasValidHeader<h>(); }
 
         bool sendHeaders(Client & client)
         {
             Container::TrackedBuffer buffer { client.recvBuffer.getTail(), client.recvBuffer.freeSize() };
-            if (!headers.sendHeaders(buffer)) return false;
-            return client.socket.send(buffer.buffer, buffer.used) == buffer.used;
+            return ClientAnswer::CommonHeader::sendHeaders(client.socket, buffer);
         }
 
         bool sendContent(Client & client, std::size_t & totalSize) {
@@ -417,7 +407,7 @@ namespace Network::Servers::HTTP
                 return c()->sendContent(client, totalSize);
             else return true;
         }
-        ClientAnswer(Code code = Code::Invalid) : replyCode(code) {}
+        ClientAnswer(Code code = Code::Invalid) : ClientAnswer::CommonHeader(code) {}
     };
 
 
