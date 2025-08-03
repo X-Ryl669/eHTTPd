@@ -16,11 +16,31 @@
     Default: 0 */
 #define UseTLSServer          0
 
+/** Enable SSL/TLS code for client.
+    Use a client that accept to connect to any HTTPS website.
+
+    Default: 0 */
+#define UseTLSClient          0
+
+/** Build a HTTP client too
+    A HTTP client is very similar to a server for message parsing, so it makes senses to also
+    build a HTTP client to avoid wasting another HTTP client library code (and parser) in your binary
+
+    Default: 0 */
+#define BuildClient           0
+
 
 /** Enable max compatibility support with RFC2616 (HTTP) standard.
     Allows to support more features in the HTTP server.
     This increases the binary size
     Default: 0 */
 #define MaxSupport            1
+
+
+#if UseTLSServer == 1 || UseTLSClient == 1
+  #define UseTLS 1
+#else
+  #define UseTLS 0
+#endif
 
 #endif

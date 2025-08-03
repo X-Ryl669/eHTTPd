@@ -37,7 +37,6 @@ namespace Network::Servers::HTTP
 #endif
 
     static constexpr const char HTTPAnswer[] = "HTTP/1.1 ";
-    static constexpr const char EOM[] = "\r\n\r\n";
     static constexpr const char BadRequestAnswer[] = "HTTP/1.1 400 Bad request\r\n\r\n";
     static constexpr const char EntityTooLargeAnswer[] = "HTTP/1.1 413 Entity too large\r\n\r\n";
     static constexpr const char InternalServerErrorAnswer[] = "HTTP/1.1 500 Internal server error\r\n\r\n";
@@ -177,17 +176,7 @@ namespace Network::Servers::HTTP
             socket.send(EOM, 2);
             return true;
         }
-        bool sendSize(std::size_t length)
-        {
-            static const char hdr[] = { ':' };
-            char buffer[sizeof("18446744073709551615")] = { };
-            socket.send(Refl::toString(Headers::ContentLength), strlen(Refl::toString(Headers::ContentLength)));
-            socket.send(hdr, 1);
-            intToStr((int)length, buffer, 10);
-            socket.send(buffer, strlen(buffer));
-            socket.send(EOM, strlen(EOM));
-            return true;
-        }
+        bool sendSize(std::size_t length) { return Common::HTTP::sendSize(socket, length); }
         bool reply(Code statusCode, const ROString & msg, bool close = false);
         bool reply(Code statusCode);
 

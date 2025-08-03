@@ -17,6 +17,10 @@
 #include <netinet/tcp.h>
 // We need sockaddr_in
 #include <netinet/in.h>
+#if BuildClient == 1
+  #include <fcntl.h>
+#endif
+
 #if UseTLS == 1
 // We need MBedTLS code
 #include <mbedtls/certs.h>
@@ -74,6 +78,67 @@ namespace Network {
 
             return Success;
         }
+
+#if BuildClient == 1
+        /** Connect to a given URI */
+        Virtual Error connect(const char * host, const uint16 port, const uint32 timeoutMillis = (uint32)-1, const ROString * = nullptr)
+        {
+            socket = ::socket(AF_INET, SOCK_STREAM, 0);
+            if (socket == -1) return SocketCreation;
+
+            // Please notice that under linux, it's not required to set the socket
+            // as non blocking if you define SO_SNDTIMEO, for connect timeout.
+            // so the code below could be optimized away. Yet, lwIP does show the
+            // same behavior so when a timeout for connection is actually required
+            // you must issue a select call here.
+
+            // Set non blocking here
+            int socketFlags = ::fcntl(socket, F_GETFL, 0);
+            if (socketFlags == -1) return SocketOption;
+            if (::fcntl(socket, F_SETFL, (socketFlags | O_NONBLOCK)) != 0) return SocketOption;
+
+            // Let the socket be without Nagle's algorithm
+            int flag = 1;
+            if (::setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag)) < 0) return SocketOption;
+            // Then connect the socket to the server
+            struct addrinfo hints = {};
+            hints.ai_family = AF_INET; // IPv4 only for now
+            hints.ai_flags = AI_ADDRCONFIG;
+            hints.ai_socktype = SOCK_STREAM;
+
+            // Resolve address
+            struct addrinfo *result = NULL;
+            if (getaddrinfo(host, NULL, &hints, &result) < 0 || result == NULL) return AddressInfo;
+
+            // Then connect to it
+            struct sockaddr_in address;
+            address.sin_port = htons(port);
+            address.sin_family = AF_INET;
+            address.sin_addr = ((struct sockaddr_in *)(result->ai_addr))->sin_addr;
+
+            // free result
+            freeaddrinfo(result);
+            int ret = ::connect(socket, (const sockaddr*)&address, sizeof(address));
+            if (ret < 0 && errno != EINPROGRESS) return Connect;
+            if (ret == 0) return Success;
+
+            // Here, we need to wait until connection happens or times out
+            if (Error err = select(false, true); err != Success) return err;
+
+            // Check for any socket errors (like ConnectionRefused)
+            socklen_t len = sizeof(ret);
+            if (!::getsockopt(socket, SOL_SOCKET, SO_ERROR, &ret, &len) && ret) return Connect;
+
+            // Restore blocking behavior here
+            if (::fcntl(socket, F_SETFL, socketFlags) != 0) return SocketOption;
+            // And set timeouts for both recv and send
+            struct timeval v = timeoutFromMs(timeoutMillis);
+            if (::setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &v, sizeof(v)) < 0) return SocketOption;
+            if (::setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, &v, sizeof(v)) < 0) return SocketOption;
+            // Ok, done!
+            return Success;
+        }
+#endif
 
 
         /** Accept a new client.
@@ -227,31 +292,34 @@ namespace Network {
             mbedtls_ssl_session_reset(&ssl);
             return Success;
         }
-/*
-        int connect(const char * host, uint16 port, const v5::DynamicBinDataView * brokerCert)
+
+#if BuildClient == 1
+        Error connect(const char * host, uint16 port, const uint32 timeoutMillis = (uint32)-1, const ROString * serverCert = nullptr)
         {
-            int ret = BaseSocket::connect(host, port, 0);
-            if (ret) return ret;
+            if (Error ret = BaseSocket::connect(host, port, timeoutMillis, nullptr); ret) return ret;
 
             // MBedTLS doesn't deal with natural socket timeout correctly, so let's fix that
             struct timeval zeroTO = {};
-            if (::setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &zeroTO, sizeof(zeroTO)) < 0) return -4;
-            if (::setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, &zeroTO, sizeof(zeroTO)) < 0) return -4;
+            if (::setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &zeroTO, sizeof(zeroTO)) < 0) return SocketOption;
+            if (::setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, &zeroTO, sizeof(zeroTO)) < 0) return SocketOption;
 
             net.fd = socket;
 
-            if (!buildConf(brokerCert))                                             return -8;
-            if (::mbedtls_ssl_set_hostname(&ssl, host))                             return -9;
+            if (serverCert)
+            {
+                if (Error ret = buildClientConf(*serverCert); ret)                   return ret;
+            }
+            if (::mbedtls_ssl_set_hostname(&ssl, host))                             return SSLHostname;
 
             // Set the method the SSL engine is using to fetch/send data to the other side
             ::mbedtls_ssl_set_bio(&ssl, &net, ::mbedtls_net_send, NULL, ::mbedtls_net_recv_timeout);
 
-            ret = ::mbedtls_ssl_handshake(&ssl);
+            int ret = ::mbedtls_ssl_handshake(&ssl);
             if (ret != 0 && ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE)
-                return -10;
+                return SSLSSLHandshake;
 
             // Check certificate if one provided
-            if (brokerCert)
+            if (serverCert)
             {
                 uint32_t flags = mbedtls_ssl_get_verify_result(&ssl);
                 if (flags != 0)
@@ -259,12 +327,13 @@ namespace Network {
                     char verify_buf[100] = {0};
                     mbedtls_x509_crt_verify_info(verify_buf, sizeof(verify_buf), "  ! ", flags);
                     printf("mbedtls_ssl_get_verify_result: %s flag: 0x%x\n", verify_buf, (unsigned int)flags);
-                    return -11;
+                    return SSLHandshake;
                 }
             }
-            return 0;
+            return Success;
         }
-*/
+#endif
+
         /** Accept a new client.
             @return 0 on success, negative value upon error */
         Error accept(BaseSocket & clientSocket, const uint32 timeoutMillis = 0)

@@ -5,12 +5,16 @@
 #include "HeadersArray.hpp"
 // We need status code too
 #include "Protocol/HTTP/Codes.hpp"
+// We need socket code too
+#include "Network/Socket.hpp"
 
 
 // Common code shared by HTTP server and client to avoid binary size deduplication
 namespace Network::Common::HTTP
 {
     using namespace Protocol::HTTP;
+
+    static constexpr const char EOM[] = "\r\n\r\n";
 
     /** A client answer structure.
         This is a convenient, template type, made to build an answer for an HTTP request.
@@ -58,6 +62,18 @@ namespace Network::Common::HTTP
 
         CommonHeader(Code code = Code::Invalid) : replyCode(code) {}
     };
+
+    static bool sendSize(BaseSocket & socket, std::size_t length)
+    {
+        static const char hdr[] = { ':' };
+        char buffer[sizeof("18446744073709551615")] = { };
+        socket.send(Refl::toString(Headers::ContentLength), strlen(Refl::toString(Headers::ContentLength)));
+        socket.send(hdr, 1);
+        intToStr((int)length, buffer, 10);
+        socket.send(buffer, strlen(buffer));
+        socket.send(EOM, strlen(EOM));
+        return true;
+    }
 }
 
 
