@@ -20,14 +20,21 @@
     Use a client that accept to connect to any HTTPS website.
 
     Default: 0 */
-#define UseTLSClient          0
+#define UseTLSClient          1
 
 /** Build a HTTP client too
     A HTTP client is very similar to a server for message parsing, so it makes senses to also
     build a HTTP client to avoid wasting another HTTP client library code (and parser) in your binary
 
     Default: 0 */
-#define BuildClient           0
+#define BuildClient           1
+
+/** Prefer more code to less memory usage
+    If this parameter is set, the code will try to limit using stack and/or heap space to create HTTP
+    protocol's buffers, and instead will directly write to the socket (thus deporting the work to the network stack)
+
+    Default: 0 */
+#define MinimizeStackSize     1
 
 
 /** Enable max compatibility support with RFC2616 (HTTP) standard.

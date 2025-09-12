@@ -19,7 +19,7 @@ namespace Network::Common::HTTP
     /** A client answer structure.
         This is a convenient, template type, made to build an answer for an HTTP request.
         There are 3 different possible answer type supported by this library:
-        1. A DIY answer, where you take over the client's socket, and set whatever you want (likely breaking HTTP protocol) - Not recommended
+        1. A DIY answer, where you take over the client's socket, and send whatever you want (likely breaking HTTP protocol) - Not recommended
         2. A simple answer, with basic headers (like Content-Type) and a fixed string as output.
         3. A more complex answer with basic headers and you want to have control over the output stream (in that case, you'll give an input stream to the library to consume)
 
@@ -35,7 +35,6 @@ namespace Network::Common::HTTP
         ExpectedHeaderArray headers;
         /** The reply status code to use */
         Code                replyCode;
-
 
         Child * c() { return static_cast<Child*>(this); }
 
@@ -54,15 +53,40 @@ namespace Network::Common::HTTP
         template <Headers h>
         bool hasValidHeader() const { return headers.template hasValidHeader<h>(); }
 
+#if MinimizeStackSize == 1
+        bool sendHeaders(Socket & socket) { return headers.sendHeaders(socket); }
+#else
         bool sendHeaders(Socket & socket, Container::TrackedBuffer & buffer)
         {
             if (!headers.sendHeaders(buffer)) return false;
             return socket.send(buffer.buffer, buffer.used) == buffer.used;
         }
-
+#endif
         CommonHeader(Code code = Code::Invalid) : replyCode(code) {}
     };
 
+    /** Useful helper to map extension to a MIME type */
+    constexpr static MIMEType getMIMEFromExtension(const ROString ext) {
+        using namespace CompileTime;
+        MIMEType mimeType = MIMEType::application_octetStream;
+        switch(constHash(ext.getData(), ext.getLength()))
+        {
+        case "html"_hash: case "htm"_hash: mimeType = MIMEType::text_html; break;
+        case "css"_hash:                   mimeType = MIMEType::text_css; break;
+        case "js"_hash:                    mimeType = MIMEType::application_javascript; break;
+        case "png"_hash:                   mimeType = MIMEType::image_png; break;
+        case "jpg"_hash: case "jpeg"_hash: mimeType = MIMEType::image_jpeg; break;
+        case "gif"_hash:                   mimeType = MIMEType::image_gif; break;
+        case "svg"_hash:                   mimeType = MIMEType::image_svg__xml; break;
+        case "webp"_hash:                  mimeType = MIMEType::image_webp; break;
+        case "xml"_hash:                   mimeType = MIMEType::application_xml; break;
+        case "txt"_hash:                   mimeType = MIMEType::text_plain; break;
+        default: break;
+        }
+        return mimeType;
+    }
+
+    /** The absolute minimum for sending the Content-Length header helper (without using sprintf or itoa) */
     static bool sendSize(BaseSocket & socket, std::size_t length)
     {
         static const char hdr[] = { ':' };

@@ -7,6 +7,9 @@ HeadersParsing: HeadersParsing.cpp ../include/Protocol/HTTP/*.hpp ../include/Ref
 PathNormalization: PathNormalization.cpp ../include/Path/Normalization.hpp ../src/Normalization.cpp ROString.o
 	g++ -std=c++20 -I ../include -g -O0 $< ROString.o -o $@
 
+eurl: eurl.cpp ../include/Network/Clients/*.hpp ../include/Network/Common/*.hpp ROString.o ../include/Streams/*.hpp
+	g++ -std=c++20 -I ../include -I ../../eCommon/include -I ../../mbedtls/install/include -L ../../mbedtls/install/lib  -g -O0 $< ROString.o -lmbedtls -lmbedx509 -lmbedcrypto -o $@
+
 ROString.o: ../../eCommon/src/Strings/ROString.cpp ../../eCommon/include/Strings/ROString.hpp
 	g++ -std=c++20 -I ../include -I ../../eCommon/include/ -g -O0 -c $< -o $@
 

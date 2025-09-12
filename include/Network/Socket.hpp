@@ -19,11 +19,15 @@
 #include <netinet/in.h>
 #if BuildClient == 1
   #include <fcntl.h>
+  #include <netdb.h>
 #endif
 
 #if UseTLS == 1
 // We need MBedTLS code
-#include <mbedtls/certs.h>
+#include <mbedtls/version.h>
+#if MBEDTLS_VERSION_MAJOR < 3
+  #include <mbedtls/certs.h>
+#endif
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
 #include <mbedtls/error.h>
@@ -123,7 +127,7 @@ namespace Network {
             if (ret == 0) return Success;
 
             // Here, we need to wait until connection happens or times out
-            if (Error err = select(false, true); err != Success) return err;
+            if (Error err = select(false, true); err.isError()) return err;
 
             // Check for any socket errors (like ConnectionRefused)
             socklen_t len = sizeof(ret);
@@ -218,46 +222,49 @@ namespace Network {
         mbedtls_net_context net;
 
     private:
-        Error buildServerConf(const ROString & serverCert, const ROString & keyFile)
+        Error buildServerConf(const ROString & serverCert, const ROString & keyFile, const uint32 timeoutMs)
         {
             if (!serverCert || !keyFile) return ArgumentsMissing;
 
             // Use given root certificate (if you have a recent version of mbedtls, you could use mbedtls_x509_crt_parse_der_nocopy instead to skip a useless copy here)
-            if (::mbedtls_x509_crt_parse_der(&cacert, serverCert.getData(), serverCert.getLength()))
+            if (::mbedtls_x509_crt_parse_der(&cacert, (const uint8*)serverCert.getData(), serverCert.getLength()))
                 return BadCertificate;
 
-            if (::mbedtls_pk_parse_key(&pk, keyFile.getData(), keyFile.getLength(), NULL, 0))
+            if (::mbedtls_pk_parse_key(&pk, (const uint8*)keyFile.getData(), keyFile.getLength(), NULL, 0
+#if MBEDTLS_VERSION_MAJOR >= 3
+              , ::mbedtls_ctr_drbg_random, &entropySource
+#endif
+            ))
                 return BadPrivateKey;
 
             // Now create configuration from default
             if (::mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_SERVER, MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT))
                 return SSLConfig;
 
-            return buildConf(true, true);
+            return buildConf(true, true, timeoutMs);
         }
 
-        Error buildClientConf(const ROString & serverCert)
+        Error buildClientConf(const ROString & serverCert, const uint32 timeoutMs)
         {
 
             // Use given root certificate (if you have a recent version of mbedtls, you could use mbedtls_x509_crt_parse_der_nocopy instead to skip a useless copy here)
-            if (serverCert && ::mbedtls_x509_crt_parse_der(&cacert, serverCert.getData(), serverCert.getLength()))
+            if (serverCert && ::mbedtls_x509_crt_parse_der(&cacert, (const uint8*)serverCert.getData(), serverCert.getLength()))
                 return BadCertificate;
 
             // Now create configuration from default
             if (::mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT))
                 return SSLConfig;
 
-            return buildConf(serverCert, false);
+            return buildConf(serverCert, false, timeoutMs);
         }
 
-        Error buildConf(bool hasCert, bool hasPKey)
+        Error buildConf(bool hasCert, bool hasPKey, const uint32 timeoutMs)
         {
             ::mbedtls_ssl_conf_ca_chain(&conf, &cacert, NULL); // Example use cacert.next, check this
             if (hasPKey && ::mbedtls_ssl_conf_own_cert(&conf, &cacert, &pk)) return BadCertificate;
             else ::mbedtls_ssl_conf_authmode(&conf, hasCert ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
 
-            uint32_t ms = timeoutMs.tv_usec / 1000;
-            ::mbedtls_ssl_conf_read_timeout(&conf, ms < 50 ? 3000 : ms);
+            ::mbedtls_ssl_conf_read_timeout(&conf, timeoutMs < 50 ? 3000 : timeoutMs);
 
             // Random number generator
             ::mbedtls_ssl_conf_rng(&conf, ::mbedtls_ctr_drbg_random, &entropySource);
@@ -271,7 +278,7 @@ namespace Network {
         }
 
     public:
-        MBTLSSocket(struct timeval & timeoutMs) : BaseSocket(timeoutMs)
+        MBTLSSocket() : BaseSocket()
         {
             mbedtls_ssl_init(&ssl);
             mbedtls_ssl_config_init(&conf);
@@ -296,7 +303,7 @@ namespace Network {
 #if BuildClient == 1
         Error connect(const char * host, uint16 port, const uint32 timeoutMillis = (uint32)-1, const ROString * serverCert = nullptr)
         {
-            if (Error ret = BaseSocket::connect(host, port, timeoutMillis, nullptr); ret) return ret;
+            if (Error ret = BaseSocket::connect(host, port, timeoutMillis, nullptr); ret.isError()) return ret;
 
             // MBedTLS doesn't deal with natural socket timeout correctly, so let's fix that
             struct timeval zeroTO = {};
@@ -305,10 +312,7 @@ namespace Network {
 
             net.fd = socket;
 
-            if (serverCert)
-            {
-                if (Error ret = buildClientConf(*serverCert); ret)                   return ret;
-            }
+            if (Error ret = buildClientConf(serverCert ? *serverCert : "", timeoutMillis); ret.isError()) return ret;
             if (::mbedtls_ssl_set_hostname(&ssl, host))                             return SSLHostname;
 
             // Set the method the SSL engine is using to fetch/send data to the other side
@@ -316,7 +320,7 @@ namespace Network {
 
             int ret = ::mbedtls_ssl_handshake(&ssl);
             if (ret != 0 && ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE)
-                return SSLSSLHandshake;
+                return SSLHandshake;
 
             // Check certificate if one provided
             if (serverCert)

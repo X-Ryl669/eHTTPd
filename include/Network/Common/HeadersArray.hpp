@@ -241,13 +241,21 @@ namespace Network::Common::HTTP
             return false;
         }
 
-
+#if MinimizeStackSize == 1
+        bool sendHeaders(BaseSocket & socket)
+        {
+            return [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
+                return (std::get<Is>(headers).send(socket) && ...);
+            }(std::make_index_sequence<sizeof...(Header)>{});
+        }
+#else
         bool sendHeaders(Container::TrackedBuffer & buffer)
         {
             return [&]<std::size_t... Is>(std::index_sequence<Is...>)  {
                 return (std::get<Is>(headers).write(buffer) && ...);
             }(std::make_index_sequence<sizeof...(Header)>{});
         }
+#endif
     };
 
     /** Convert the list of headers you're expecting to the matching HeadersArray the library is using */

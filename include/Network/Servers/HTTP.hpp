@@ -386,8 +386,12 @@ namespace Network::Servers::HTTP
 
         bool sendHeaders(Client & client)
         {
+#if MinimizeStackSize == 1
+            return ClientAnswer::CommonHeader::sendHeaders(client.socket);
+#else
             Container::TrackedBuffer buffer { client.recvBuffer.getTail(), client.recvBuffer.freeSize() };
             return ClientAnswer::CommonHeader::sendHeaders(client.socket, buffer);
+#endif
         }
 
         bool sendContent(Client & client, std::size_t & totalSize) {
@@ -505,27 +509,6 @@ namespace Network::Servers::HTTP
     template <typename InputStream, Headers ... answerHeaders>
     struct FileAnswer : public ClientAnswer<FileAnswer<InputStream, answerHeaders...>, Headers::ContentType, answerHeaders...>
     {
-        /** Get the expected MIME type from the given file extension */
-        constexpr static MIMEType getMIMEFromExtension(const ROString ext) {
-            using namespace CompileTime;
-            MIMEType mimeType = MIMEType::application_octetStream;
-            switch(constHash(ext.getData(), ext.getLength()))
-            {
-            case "html"_hash: case "htm"_hash: mimeType = MIMEType::text_html; break;
-            case "css"_hash:                   mimeType = MIMEType::text_css; break;
-            case "js"_hash:                    mimeType = MIMEType::application_javascript; break;
-            case "png"_hash:                   mimeType = MIMEType::image_png; break;
-            case "jpg"_hash: case "jpeg"_hash: mimeType = MIMEType::image_jpeg; break;
-            case "gif"_hash:                   mimeType = MIMEType::image_gif; break;
-            case "svg"_hash:                   mimeType = MIMEType::image_svg__xml; break;
-            case "webp"_hash:                  mimeType = MIMEType::image_webp; break;
-            case "xml"_hash:                   mimeType = MIMEType::application_xml; break;
-            case "txt"_hash:                   mimeType = MIMEType::text_plain; break;
-            default: break;
-            }
-            return mimeType;
-        }
-
         InputStream & getInputStream(Socket &) { return stream; }
 
         FileAnswer(const char* path) : FileAnswer::ClientAnswer(Code::NotFound), stream(path)

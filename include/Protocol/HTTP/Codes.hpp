@@ -168,6 +168,7 @@ namespace Refl
         case Code::GatewayTimedOut         : return "Gateway Timed Out";
         case Code::UnsupportedHTTPVersion  : return "Unsupported HTTP Version";
         case Code::ConnectionTimedOut      : return "Connection Timed Out";
+        case Code::ClientRequestError      : return "Client request error";
         default: return "";
         }
     }

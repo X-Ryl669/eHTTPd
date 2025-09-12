@@ -309,7 +309,18 @@ namespace Protocol::HTTP
             if (vs == 0) return false; // Skip header without value
             return true;
         }
+#if MinimizeStackSize == 1
+        bool send(BaseSocket & socket)
+        {
+            if (!v.hasValue()) return true; // Skip headers without any value, since it's wrong anyway
+            const ROString & s = Refl::toString(header);
 
+            if (socket.send(s.getData(), s.getLength()) != s.getLength()) return false;
+            if (socket.send(":", 1) != 1) return false;
+            if (!v.send(socket)) return false;
+            return socket.send("\r\n", 2) == 2;
+        }
+#else
         bool write(Container::TrackedBuffer & buffer)
         {
             std::size_t vs = 0;
@@ -324,6 +335,7 @@ namespace Protocol::HTTP
             buffer.used += vs;
             return buffer.save("\r\n", 2);
         }
+#endif
     };
 }
 
