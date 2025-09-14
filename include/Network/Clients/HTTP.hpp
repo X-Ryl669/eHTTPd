@@ -129,7 +129,6 @@ namespace Network::Clients::HTTP
             Invalid = 0,
             ReqLine,
             RecvHeaders,
-            NeedRefillHeaders, // Currently not implemented, used to trigger route's processing for emptying the recv buffer in case the request doesn't fill the available buffer
             HeadersDone,
             ReqDone,
 
@@ -137,9 +136,34 @@ namespace Network::Clients::HTTP
 
         template <int verbosity, typename Request>
         Code sendRequest(Request & request)
+        {        
+            RWString currentURL = request.url;
+            int redirectCount = 3;
+
+            while (redirectCount)
+            {
+                Code code = sendRequestImpl<verbosity>(request, currentURL);
+                if (code == Code::MovedForever || code == Code::MovedTemporarily || code == Code::TemporaryRedirect)
+                {   // Handle redirects
+                    redirectCount--;
+                    continue;
+                }
+                else if (code == Code::Unauthorized)
+                {   // Handle authentication
+                    redirectCount--;
+                    continue;
+                }
+                return code;
+            }
+            // Too many redirections leads to stopping the bleeding
+            return Code::ClientRequestError;
+        }
+
+        template <int verbosity, typename Request>
+        Code sendRequestImpl(Request & request, RWString & currentURL)
         {
             // Parse the given URL to check for supported features
-            ROString url = request.url;
+            ROString url = currentURL;
             ROString scheme = url.splitFrom("://");
             if (scheme != "http" && scheme != "https") return Code::ClientRequestError;
 #if UseTLSClient == 0
@@ -232,7 +256,12 @@ namespace Network::Clients::HTTP
             // Receive HTTP server answer now
             // Use the same logic as for the HTTP server here, that is, receive data from the server in a (ring buffer) and parse it
             // We are only interested in few headers:
-            ExpectedAnswer<Headers::Location, Headers::ContentType, Headers::ContentLength, Headers::TransferEncoding, Headers::ContentEncoding, Headers::WWWAuthenticate> answer;
+            typename ToHeaderArray<Headers::Location, 
+                                   Headers::ContentType, 
+                                   Headers::ContentLength, 
+                                   Headers::TransferEncoding, 
+                                   Headers::ContentEncoding, 
+                                   Headers::WWWAuthenticate>::Type answer;
             Container::TranscientVault<ClientBufferSize> recvBuffer;
             ParsingStatus status = ReqLine;
             Code serverAnswer;
@@ -272,21 +301,68 @@ namespace Network::Clients::HTTP
                 [[fallthrough]];
                 case RecvHeaders:
                 {
-                    ROString header = buffer.splitFrom("\r\n");
-                    if (!header) {
-                        // Not enough data to parse a single header, let's refill
-                        recvBuffer.drop(buffer.getData());
-                        if (buffer.midString(0, 2) == "\r\n") {
-                            status = HeadersDone;
-                            recvBuffer.drop(2);
+                    bool refill = false;
+                    while (!refill) {
+                        ROString headerLine = buffer.splitFrom("\r\n"), header, value;
+                        if (!headerLine) {
+                            // Not enough data to parse a single header, let's refill
+                            recvBuffer.drop(buffer.getData());
+                            if (buffer.midString(0, 2) == "\r\n") {
+                                status = HeadersDone;
+                                recvBuffer.drop(2);
+                            }
+                            refill = true;
+                            break;
                         }
-                        continue;
+                        // Parse the header now
+                        if (GenericHeaderParser::parseHeader(headerLine, header) != ParsingError::MoreData) 
+                            return Code::UnsupportedHTTPVersion;
+
+                        if (GenericHeaderParser::parseValue(headerLine, value) != ParsingError::MoreData)
+                            return Code::UnsupportedHTTPVersion;
+
+                        // The code is doing a O(N) search for all the headers we are interested into (those of answer), not all 
+                        // headers' space (where it could do a O(log N) search). Since the former is much smaller than the latter, 
+                        // this should still produce a significant speedup despite the algorithmic disadvantage.
+                        answer.acceptAndParse(header, value); // Not check for error since if the header isn't required in the answer, it'd return false
                     }
-                    // Parse the header now
+                    if (refill) continue;
 
                 }
-                case NeedRefillHeaders:
                 case HeadersDone:
+                {
+                    // Ok, here, either we need to fetch the requested data or we're done, or we need to reloop for the next location.
+                    auto location = answer.getHeader<Headers::Location>;
+                    if (location.getValueElement(0)) {
+                        currentURL = location.getValueElement(0); // This is UB since the location's value will be destructed upon calling the TCO.
+                        return serverAnswer;
+                    }
+
+                    // Do the same for any authentication request
+                    auto authenticate = answer.getHeader<Headers::WWWAuthenticate>();
+                    if (authenticate.getValueElement(0)) {
+                        // TODO
+                        return serverAnswer;
+                    }
+
+                    // Ok, now let's fetch the content, if any
+                    auto contentLength = answer.getHeader<Headers::ContentLength>();
+                    if (contentLength.getValueElement(0) > 0) {
+                        // Need to fetch the given amount of data from the server
+                        // Check if we have an encoding and act accordingly here
+                        auto contentEncoding = answer.getHeader<Headers::ContentEncoding>();
+                        if (contentEncoding.getValueElement(0) != Encoding::identity)
+                            return Code::UnsupportedHTTPVersion; // We didn't say we would accept an encoding, so it's an error here
+                    }
+                    else {
+                        // Check if we have a chunked transfer mode and act accordingly here
+                        auto transferEncoding = answer.getHeader<Headers::TransferEncoding>();
+                        if (transferEncoding.getValueElementsCount() > 1 || transferEncoding.getValueElement(0) != Encoding::chunked)
+                            return Code::ClientRequestError; // Combination not supported (but very rare indeed)
+                    }
+                    // Ok, done now
+                    return serverAnswer;
+                }
                 case ReqDone:
                 default: return Code::ClientRequestError;
                 }
