@@ -378,7 +378,7 @@ namespace Network {
             return ::mbedtls_ssl_write(&ssl, (const uint8*)buffer, length);
         }
 
-        Error recv(char * buffer, const uint32 minLength, const uint32 maxLength = 0)
+        Error recv(char * buffer, const uint32 maxLength = 0, const uint32 minLength = 0)
         {
             uint32 ret = 0;
             while (ret < minLength)

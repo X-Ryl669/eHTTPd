@@ -233,6 +233,7 @@ namespace Protocol::HTTP
         typedef typename HeaderMap::ValueMap<h>::ExpectedType ValueType;
         ValueType parsed;
         static constexpr Headers header = h;
+        using RequestHeaderBase::acceptValue;
 
         /** Check to see if this header is the expected type and in that case, capture the value */
         bool acceptHeader(ROString & hdr) const { return hdr == Refl::toString(h); }

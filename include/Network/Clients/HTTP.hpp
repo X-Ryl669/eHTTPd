@@ -32,44 +32,41 @@ namespace Network::Clients::HTTP
     using namespace Protocol::HTTP;
     using namespace Network::Common::HTTP;
 
-    template <Headers ... expectedHeaders>
-    struct ExpectedAnswer : public CommonHeader<ExpectedAnswer<expectedHeaders...>, BaseSocket, expectedHeaders...>
-    {
-
-        ExpectedAnswer() {}
-    };
-
+    template <typename OutStream>
     struct Request
     {
         Method method;
         ROString url;
         ROString additionalHeaders;
+        OutStream & outStream;
 
-        Request(Method method, ROString url, ROString additionalHeaders = "") : method(method), url(url), additionalHeaders(additionalHeaders) {}
+        Request(OutStream & stream, Method method, ROString url, ROString additionalHeaders = "") : outStream(stream), method(method), url(url), additionalHeaders(additionalHeaders) {}
     };
+    // Deduction guide to avoid specifying the output stream type
+    template <typename OutStream> Request(OutStream &, Method, ROString, ROString = "") -> Request<OutStream>;
 
-    template <typename Stream>
-    struct RequestWithTypedStream : public Request
+    template <typename InStream, typename OutStream>
+    struct RequestWithTypedStream : public Request<OutStream>
     {
-        auto getInputStream(BaseSocket & socket) { return stream; }
+        auto getInputStream(BaseSocket & socket) { return inStream; }
         const char* getStreamType(BaseSocket &)  { return Refl::toString(mime); }
 
-        Stream stream;
+        InStream inStream;
         MIMEType mime;
 
         template<typename StreamArg, typename ... Args>
-        RequestWithTypedStream(StreamArg arg, MIMEType mime, Args && ... args) : Request(std::forward<Args>(args)...), stream(arg), mime(mime) {}
+        RequestWithTypedStream(StreamArg arg, MIMEType mime, Args && ... args) : RequestWithTypedStream::Request(std::forward<Args>(args)...), inStream(arg), mime(mime) {}
     };
 
-    template <typename Stream>
-    struct RequestWithStream : public Request
+    template <typename Stream, typename OutStream>
+    struct RequestWithStream : public Request<OutStream>
     {
-        auto getInputStream(BaseSocket & socket) { return stream; }
+        auto getInputStream(BaseSocket & socket) { return inStream; }
 
-        Stream stream;
+        Stream inStream;
 
         template<typename StreamArg, typename ... Args>
-        RequestWithStream(StreamArg arg, Args && ... args) : Request(std::forward<Args>(args)...), stream(arg) {}
+        RequestWithStream(StreamArg arg, Args && ... args) : RequestWithStream::Request(std::forward<Args>(args)...), inStream(arg) {}
     };
 
     template <typename Base>
@@ -108,7 +105,7 @@ namespace Network::Clients::HTTP
 
         template <typename ... Args> auto connect(const char * h, uint16 p, Args && ... args) { auto r = socket.connect(h, p, std::forward<Args>(args)...); SLog(Level::Info, "Connect to %s:%hu returned: %d", h, p, (int)r); return r; }
         auto send(const char * b, const uint32 l)                                             { auto r = socket.send(b, l); SLog(Level::Info, "Send [%.*s] returned: %d/%u", l, b, (int)r, l); return r; }
-        auto recv(char * b, const uint32 l, const uint32 m = 0)                               { auto r = socket.recv(b, l, m); SLog(Level::Info, "Recv returned: %d/%u [%.*s]", (int)r, l, (int)r > 0 ? (int)r : 0, b); return r; }
+        auto recv(char * b, const uint32 l, const uint32 m = 0)                               { auto r = socket.recv(b, l, m); SLog(Level::Info, "Recv returned: %d/%u [%.*s]", (int)r, l, r.getCount() > 0 ? r.getCount() : 0, b); return r; }
     };
 
     /** A native and simple HTTP client library reusing the code of the HTTP server to avoid duplicate in your binary.
@@ -130,13 +127,11 @@ namespace Network::Clients::HTTP
             ReqLine,
             RecvHeaders,
             HeadersDone,
-            ReqDone,
-
         };
 
         template <int verbosity, typename Request>
         Code sendRequest(Request & request)
-        {        
+        {
             RWString currentURL = request.url;
             int redirectCount = 3;
 
@@ -218,6 +213,10 @@ namespace Network::Clients::HTTP
             // Send the headers
             if (socket.send(request.additionalHeaders.getData(), request.additionalHeaders.getLength()) != request.additionalHeaders.getLength())
                 return Code::Unavailable;
+            // TODO: Support GZIP and Deflate
+            const char acceptEncoding[] = "Accept-Encoding:identity\r\n";
+            if (socket.send(acceptEncoding, sizeof(acceptEncoding) - 1) != sizeof(acceptEncoding) - 1)
+                return Code::Unavailable;
 
             // Check if we have some content to send
             if constexpr (requires{request.getInputStream(*socket);}) {
@@ -256,11 +255,10 @@ namespace Network::Clients::HTTP
             // Receive HTTP server answer now
             // Use the same logic as for the HTTP server here, that is, receive data from the server in a (ring buffer) and parse it
             // We are only interested in few headers:
-            typename ToHeaderArray<Headers::Location, 
-                                   Headers::ContentType, 
-                                   Headers::ContentLength, 
-                                   Headers::TransferEncoding, 
-                                   Headers::ContentEncoding, 
+            typename ToHeaderArray<Headers::ContentType,
+                                   Headers::ContentLength,
+                                   Headers::TransferEncoding,
+                                   Headers::ContentEncoding,
                                    Headers::WWWAuthenticate>::Type answer;
             Container::TranscientVault<ClientBufferSize> recvBuffer;
             ParsingStatus status = ReqLine;
@@ -270,7 +268,7 @@ namespace Network::Clients::HTTP
             // Main loop to receive data
             while(true)
             {
-                Error err = socket.recv((const char*)recvBuffer.getTail(), recvBuffer.freeSize());
+                Error err = socket.recv((char*)recvBuffer.getTail(), recvBuffer.freeSize());
                 if (err.isError()) return Code::InternalServerError;
                 recvBuffer.stored(err.getCount());
 
@@ -301,43 +299,42 @@ namespace Network::Clients::HTTP
                 [[fallthrough]];
                 case RecvHeaders:
                 {
-                    bool refill = false;
-                    while (!refill) {
-                        ROString headerLine = buffer.splitFrom("\r\n"), header, value;
-                        if (!headerLine) {
+                    while (status == RecvHeaders) {
+                        ROString headerLine, header, value;
+                        int pos = buffer.Find("\r\n");
+                        if (pos == buffer.getLength()) {
                             // Not enough data to parse a single header, let's refill
                             recvBuffer.drop(buffer.getData());
-                            if (buffer.midString(0, 2) == "\r\n") {
-                                status = HeadersDone;
-                                recvBuffer.drop(2);
-                            }
-                            refill = true;
+                            break;
+                        }
+                        headerLine = buffer.splitAt(pos); buffer.splitAt(2);
+                        if (!headerLine) {
+                            status = HeadersDone;
+                            recvBuffer.drop(buffer.getData()); // Don't drop the buffer, since it'll be required for
                             break;
                         }
                         // Parse the header now
-                        if (GenericHeaderParser::parseHeader(headerLine, header) != ParsingError::MoreData) 
+                        if (GenericHeaderParser::parseHeader(headerLine, header) != ParsingError::MoreData)
                             return Code::UnsupportedHTTPVersion;
 
                         if (GenericHeaderParser::parseValue(headerLine, value) != ParsingError::MoreData)
                             return Code::UnsupportedHTTPVersion;
 
-                        // The code is doing a O(N) search for all the headers we are interested into (those of answer), not all 
-                        // headers' space (where it could do a O(log N) search). Since the former is much smaller than the latter, 
+                        // Shortcut to avoid having to save the parsed headers in the vault, all other headers are converted to the expected value and don't need specific saving
+                        if (header == "Location") {
+                            currentURL = value;
+                            return serverAnswer; // Will likely loop in the outer function to attempt a redirect
+                        }
+                        // The code is doing a O(N) search for all the headers we are interested into (those of answer), not all
+                        // headers' space (where it could do a O(log N) search). Since the former is much smaller than the latter,
                         // this should still produce a significant speedup despite the algorithmic disadvantage.
                         answer.acceptAndParse(header, value); // Not check for error since if the header isn't required in the answer, it'd return false
                     }
-                    if (refill) continue;
-
+                    if (status == RecvHeaders) continue;
                 }
+                [[fallthrough]];
                 case HeadersDone:
                 {
-                    // Ok, here, either we need to fetch the requested data or we're done, or we need to reloop for the next location.
-                    auto location = answer.getHeader<Headers::Location>;
-                    if (location.getValueElement(0)) {
-                        currentURL = location.getValueElement(0); // This is UB since the location's value will be destructed upon calling the TCO.
-                        return serverAnswer;
-                    }
-
                     // Do the same for any authentication request
                     auto authenticate = answer.getHeader<Headers::WWWAuthenticate>();
                     if (authenticate.getValueElement(0)) {
@@ -351,19 +348,28 @@ namespace Network::Clients::HTTP
                         // Need to fetch the given amount of data from the server
                         // Check if we have an encoding and act accordingly here
                         auto contentEncoding = answer.getHeader<Headers::ContentEncoding>();
+                        // TODO: Support deflate and gzip encoding here
                         if (contentEncoding.getValueElement(0) != Encoding::identity)
-                            return Code::UnsupportedHTTPVersion; // We didn't say we would accept an encoding, so it's an error here
+                            return Code::UnsupportedHTTPVersion; // We didn't say we would accept another encoding, so it's an error here
+
+                        size_t totalLen = (size_t)contentLength.getValueElement(0);
+                        // Write any pending data first
+                        Streams::CachedSocket inStream(*_socket, recvBuffer.getHead(), recvBuffer.getSize());
+                        if (Streams::copy(inStream, request.outStream, totalLen) != totalLen)
+                            return Code::ClientRequestError;
                     }
                     else {
                         // Check if we have a chunked transfer mode and act accordingly here
                         auto transferEncoding = answer.getHeader<Headers::TransferEncoding>();
                         if (transferEncoding.getValueElementsCount() > 1 || transferEncoding.getValueElement(0) != Encoding::chunked)
                             return Code::ClientRequestError; // Combination not supported (but very rare indeed)
+                        // Write chunked while decoded
+                        Streams::ChunkedInput inStream(*_socket, recvBuffer.getHead(), recvBuffer.getSize());
+                        Streams::copy(inStream, request.outStream);
                     }
                     // Ok, done now
                     return serverAnswer;
                 }
-                case ReqDone:
                 default: return Code::ClientRequestError;
                 }
             }
