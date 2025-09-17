@@ -80,8 +80,8 @@ int main(int argc, const char * argv[])
     // By default, we return the request on standard output
     Streams::FileOutput out(STDOUT_FILENO);
 
-    auto request = filePath ? RequestWithTypedStream<Streams::FileInput, Streams::FileOutput>(filePath, getMIMEFromExtension(ROString(filePath).fromLast(".")), out, method, url, headersBuffer)
-                            : Request(out, method, url, headersBuffer);
+    auto request = filePath ? RequestWithTypedStream<Streams::FileInput, Request<BasicEventCallback<Streams::FileOutput>>>(filePath, getMIMEFromExtension(ROString(filePath).fromLast(".")), out, method, url, headersBuffer)
+                            : Request<BasicEventCallback<Streams::FileOutput>>(out, method, url, headersBuffer);
 
     Client client;
     Code code = verbosity == 0 ? client.sendRequest<0>(request) : verbosity == 1 ? client.sendRequest<1>(request) : client.sendRequest<2>(request);

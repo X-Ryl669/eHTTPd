@@ -20,7 +20,7 @@
     Use a client that accept to connect to any HTTPS website.
 
     Default: 0 */
-#define UseTLSClient          0
+#define UseTLSClient          1
 
 /** Build a HTTP client too
     A HTTP client is very similar to a server for message parsing, so it makes senses to also
